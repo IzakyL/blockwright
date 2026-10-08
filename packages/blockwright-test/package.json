@@ -1,0 +1,52 @@
+{
+  "name": "@izakyl/blockwright-test",
+  "version": "0.1.0-alpha.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/.tsbuildinfo"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IzakyL/blockwright.git",
+    "directory": "packages/blockwright-test"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "npm run build && node --test 'dist/*.test.js'",
+    "prepack": "npm run build && node ../../scripts/check-package.mjs"
+  },
+  "peerDependencies": {
+    "@playwright/test": "^1.60.0"
+  },
+  "dependencies": {
+    "@izakyl/blockwright-client": "0.1.0-alpha.0",
+    "@izakyl/blockwright-minecraft": "0.1.0-alpha.0",
+    "@izakyl/blockwright-ui": "0.1.0-alpha.0"
+  },
+  "description": "Playwright fixtures and failure evidence for Blockwright game tests",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/IzakyL/blockwright#readme",
+  "bugs": {
+    "url": "https://github.com/IzakyL/blockwright/issues"
+  },
+  "keywords": [
+    "minecraft",
+    "neoforge",
+    "automation",
+    "testing"
+  ]
+}

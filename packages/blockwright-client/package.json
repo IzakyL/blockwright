@@ -1,0 +1,47 @@
+{
+  "name": "@izakyl/blockwright-client",
+  "version": "0.1.0-alpha.0",
+  "license": "MIT",
+  "type": "module",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/.tsbuildinfo"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IzakyL/blockwright.git",
+    "directory": "packages/blockwright-client"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "npm run build && node --test 'dist/*.test.js'",
+    "prepack": "npm run build && node ../../scripts/check-package.mjs"
+  },
+  "description": "Blockwright native driver and TypeScript SDK for Minecraft automation",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/IzakyL/blockwright#readme",
+  "bugs": {
+    "url": "https://github.com/IzakyL/blockwright/issues"
+  },
+  "keywords": [
+    "minecraft",
+    "neoforge",
+    "automation",
+    "testing"
+  ]
+}

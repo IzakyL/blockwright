@@ -1,0 +1,28 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.blockwright.agent.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [],
+  "client": [
+    "CameraMixin",
+    "EntityRendererMixin",
+    "FogRendererMixin",
+    "FontMixin",
+    "GameRendererMixin",
+    "GLXMixin",
+    "GuiGraphicsMixin",
+    "InputConstantsMixin",
+    "ItemRendererMixin",
+    "LevelRendererMixin",
+    "LibraryMixin",
+    "LoadingErrorScreenMixin",
+    "RenderSystemMixin",
+    "RenderTypeMixin",
+    "ToastComponentMixin",
+    "WindowMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

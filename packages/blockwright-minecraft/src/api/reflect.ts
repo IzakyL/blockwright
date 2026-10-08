@@ -1,0 +1,23 @@
+// `reflect`: path queries, method calls, field writes, handles and symbol checks on either side.
+export {
+  reflectQuery as query,
+  reflectQueryAll as queryAll,
+  reflectInvoke as invoke,
+  reflectSetField as setField,
+  reflectSymbols as symbols,
+  reflectRelease as release,
+  type ValueLimits,
+  type ReflectRoot as Root,
+  type ReflectQuerySpec as QuerySpec,
+  type ReflectQueryNode as QueryNode,
+  type ReflectQueryResult as QueryResult,
+  type ReflectQueryOutcome as QueryOutcome,
+  type InvokeSpec,
+  type InvokeResult,
+  type SetFieldSpec,
+  type SetFieldResult,
+  type SymbolDeclaration,
+  type SymbolCheck,
+  type SymbolsResult,
+} from "../core/reflect.js";
+export { reflectNumber as number, reflectBoolean as boolean, reflectString as string } from "../core/reflect-readers.js";

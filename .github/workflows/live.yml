@@ -1,0 +1,41 @@
+name: Live game smoke
+on:
+  workflow_dispatch:
+    inputs:
+      accept_minecraft_eula:
+        description: 'I have read and accept https://www.minecraft.net/eula for this test run'
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  live:
+    if: inputs.accept_minecraft_eula
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libegl1 libgl1 libgl1-mesa-dri libx11-6 libxrandr2 libxcursor1 libxi6 libxinerama1 libxxf86vm1 libasound2t64 ffmpeg
+      - run: rustup show
+      - run: npm install --global npm@12.0.2
+      - run: npm ci
+      - run: npm run build:release
+      - run: npm run test:live -- live/test-fixtures.spec.ts --workers=1
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: game-test-results
+          path: live/test-results/
+          if-no-files-found: ignore

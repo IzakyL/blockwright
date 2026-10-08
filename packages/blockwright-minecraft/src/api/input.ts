@@ -1,0 +1,35 @@
+// `input`: the keyboard and mouse, as the game's input handlers receive them.
+export {
+  key,
+  click,
+  moveCursor as move,
+  mouseButton as button,
+  scroll,
+  drag,
+  type Point,
+  type KeyAction,
+  type KeyInput,
+  type KeyResult,
+  type KeybindResult,
+  type RawKeyResult,
+  type TypedTextResult,
+  type ClickOptions,
+  type ScreenRouteOptions,
+  type MoveCursorResult as MoveResult,
+  type MouseButtonOptions as ButtonOptions,
+  type ScrollOptions,
+  type ScrollResult,
+  type DragOptions,
+  type DragResult,
+} from "../client/input.js";
+export { stateCursor as cursor } from "../client/state.js";
+export type {
+  MouseButtonName,
+  KeyModifiers,
+  MouseDispatch,
+  CursorPosition,
+  CursorState,
+  MouseButtonResult as ButtonResult,
+  ClickResult,
+  ScreenClickResult,
+} from "../client/types.js";

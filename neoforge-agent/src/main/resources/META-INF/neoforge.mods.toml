@@ -1,0 +1,32 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "MIT"
+
+[[mixins]]
+config = "blockwright.mixins.json"
+
+[[mixins]]
+config = "blockwright.access.mixins.json"
+
+[[mods]]
+modId = "blockwright"
+version = "${version}"
+displayName = "Blockwright NeoForge Agent"
+authors = "Blockwright"
+description = '''
+In-process automation for Blockwright NeoForge instances.
+'''
+
+[[dependencies.blockwright]]
+modId = "neoforge"
+type = "required"
+versionRange = "${neoforge_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.blockwright]]
+modId = "minecraft"
+type = "required"
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "BOTH"

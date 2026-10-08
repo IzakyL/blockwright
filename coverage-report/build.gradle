@@ -1,0 +1,63 @@
+plugins {
+    id "java"
+}
+
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(project.java_release.toInteger())
+    }
+}
+
+dependencies {
+    implementation "org.jacoco:org.jacoco.core:${project.jacoco_version}"
+    implementation "org.jacoco:org.jacoco.report:${project.jacoco_version}"
+    implementation "org.ow2.asm:asm:${project.asm_version}"
+    implementation "org.ow2.asm:asm-tree:${project.asm_version}"
+    implementation "org.ow2.asm:asm-commons:${project.asm_version}"
+    implementation "com.google.code.gson:gson:2.10.1"
+
+    testImplementation platform("org.junit:junit-bom:5.10.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+    useJUnitPlatform()
+    testLogging { events "failed" }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+    options.release = project.java_release.toInteger()
+}
+
+// The driver runs this as `java -jar`, so the jar carries its dependencies unpacked.
+jar {
+    manifest {
+        attributes "Main-Class": "dev.blockwright.coverage.Main"
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from({ configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }) {
+        exclude "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/*.EC"
+        exclude "META-INF/MANIFEST.MF", "META-INF/versions/**", "module-info.class"
+    }
+}
+
+// Keep complete license texts in the fat JAR under distinct names.
+tasks.named("jar") {
+    from("licenses") { into "META-INF/blockwright/licenses" }
+    from("THIRD_PARTY.md") { into "META-INF/blockwright" }
+    // Preserve any upstream notices without collisions between dependency JARs.
+    configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.each { artifact ->
+        from(zipTree(artifact.file)) {
+            include "META-INF/LICENSE*", "META-INF/NOTICE*", "LICENSE*", "NOTICE*", "COPYING*"
+            into "META-INF/blockwright/upstream/${artifact.moduleVersion.id.group}/${artifact.name}/${artifact.moduleVersion.id.version}"
+        }
+    }
+}

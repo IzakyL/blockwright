@@ -1,0 +1,31 @@
+[workspace]
+members = [
+  "crates/blockwright",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/IzakyL/blockwright"
+
+[workspace.dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+glob = "0.3"
+libc = "0.2"
+reflink-copy = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_path_to_error = "0.1"
+sha2 = "0.10"
+tokio = { version = "1.37", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+urlencoding = "2.1"
+uuid = { version = "1.8", features = ["serde", "v4"] }
+walkdir = "2.5"
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }

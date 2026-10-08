@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/blockwright-client" },
+    { "path": "packages/blockwright-ui" },
+    { "path": "packages/blockwright-minecraft" },
+    { "path": "packages/blockwright-mcp" },
+    { "path": "packages/blockwright-test" }
+  ]
+}

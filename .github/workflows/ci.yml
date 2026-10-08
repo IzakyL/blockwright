@@ -1,0 +1,68 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan complete Git history
+        run: |
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          echo '9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  /tmp/gitleaks.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks git --redact --log-opts=--all .
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install native build requirements
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - run: rustup show
+      - run: npm install --global npm@12.0.2
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run release:check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages
+          path: release/
+          if-no-files-found: error
+  install:
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        node: ['22.14.0', '24.20.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '${{ matrix.node }}'
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: release
+      - name: Install and exercise packages outside the checkout
+        run: |
+          consumer=$(mktemp -d)
+          cp scripts/package-smoke.mjs "$consumer/smoke.mjs"
+          printf '{"private":true,"type":"module"}\n' > "$consumer/package.json"
+          npm install --prefix "$consumer" --ignore-scripts --no-audit "$PWD"/release/*.tgz @playwright/test@1.60.0
+          cd "$consumer"
+          node smoke.mjs

@@ -1,0 +1,16 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+        maven { url = "https://maven.neoforged.net/releases" }
+    }
+}
+
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
+        maven { url = "https://maven.neoforged.net/releases" }
+    }
+}
+
+rootProject.name = "blockwright-neoforge-agent"

@@ -1,0 +1,12 @@
+[neoforge]
+minecraft_version = "1.21.1"
+loader_version = "21.1.233"
+jvm_args = ["-Xmx2G"]
+
+[neoforge.server]
+# Set true only after reading and accepting https://www.minecraft.net/eula.
+eula = false
+world = "flat"
+
+[neoforge.client.display]
+device = "software"

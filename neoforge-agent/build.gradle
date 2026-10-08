@@ -1,0 +1,107 @@
+plugins {
+    id "java-library"
+    id "net.neoforged.moddev" version "2.0.141"
+}
+
+group = project.maven_group
+version = project.mod_version
+
+base {
+    archivesName = project.archives_base_name
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(project.java_release.toInteger())
+    }
+    withSourcesJar()
+}
+
+// The agent calls Minecraft directly; tests only need its classes to link, never to bootstrap.
+sourceSets.test.compileClasspath += sourceSets.main.compileClasspath
+sourceSets.test.runtimeClasspath += sourceSets.main.compileClasspath
+
+// Prefab Java modules (packages/*/java/**) are sent into the game as source and compiled there. This source
+// set compile-checks them against the game classpath and the public api only; it is never bundled.
+def moduleSourceDirs = (file("../packages").listFiles() ?: [] as File[])
+    .collect { new File(it, "java") }
+    .findAll { it.isDirectory() }
+    .sort()
+
+def apiJar = tasks.register("apiJar", Jar) {
+    description = "The dev.blockwright.api package alone, which is all module code may reference."
+    archiveClassifier = "api"
+    destinationDirectory = layout.buildDirectory.dir("api")
+    from(sourceSets.main.output) {
+        include "dev/blockwright/api/**"
+    }
+}
+
+sourceSets {
+    modules {
+        java {
+            srcDirs = moduleSourceDirs
+        }
+        resources {
+            srcDirs = []
+        }
+        compileClasspath = sourceSets.main.compileClasspath + files(apiJar)
+    }
+}
+
+tasks.named("check") {
+    dependsOn tasks.named("compileModulesJava")
+}
+
+neoForge {
+    version = project.neoforge_version
+
+    runs {
+        client {
+            client()
+        }
+        server {
+            server()
+        }
+    }
+
+    mods {
+        blockwright {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+dependencies {
+    compileOnly "com.google.code.gson:gson:2.10.1"
+    testImplementation "com.google.code.gson:gson:2.10.1"
+    testImplementation platform("org.junit:junit-bom:5.10.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+    useJUnitPlatform()
+    testLogging { events "failed" }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+    options.release = project.java_release.toInteger()
+}
+
+processResources {
+    inputs.property "version", project.version
+    inputs.property "neoforge_version_range", project.neoforge_version_range
+    inputs.property "minecraft_version_range", project.minecraft_version_range
+    inputs.property "java_release", project.java_release
+
+    filesMatching("META-INF/neoforge.mods.toml") {
+        expand(
+            "version": project.version,
+            "neoforge_version_range": project.neoforge_version_range,
+            "minecraft_version_range": project.minecraft_version_range,
+            "java_release": project.java_release,
+        )
+    }
+}

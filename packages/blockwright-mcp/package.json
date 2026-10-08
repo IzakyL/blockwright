@@ -1,0 +1,60 @@
+{
+  "name": "@izakyl/blockwright-mcp",
+  "version": "0.1.0-alpha.0",
+  "license": "MIT",
+  "type": "module",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "blockwright-mcp": "dist/main.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/.tsbuildinfo"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IzakyL/blockwright.git",
+    "directory": "packages/blockwright-mcp"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "npm run build && node --test 'dist/*.test.js'",
+    "prepack": "npm run build && node ../../scripts/check-package.mjs"
+  },
+  "dependencies": {
+    "@izakyl/blockwright-client": "0.1.0-alpha.0",
+    "@izakyl/blockwright-minecraft": "0.1.0-alpha.0",
+    "@izakyl/blockwright-ui": "0.1.0-alpha.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@izakyl/blockwright-test": "0.1.0-alpha.0"
+  },
+  "description": "Model Context Protocol server for Blockwright Minecraft automation",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/IzakyL/blockwright#readme",
+  "bugs": {
+    "url": "https://github.com/IzakyL/blockwright/issues"
+  },
+  "keywords": [
+    "minecraft",
+    "neoforge",
+    "automation",
+    "testing"
+  ]
+}

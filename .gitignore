@@ -1,0 +1,17 @@
+target/
+node_modules/
+dist/
+**/.gradle/
+**/build/
+**/run/
+*.log
+*.ndjson
+.blockwright/
+.blockwright-store/
+test-results/
+# Local credentials and release output
+.env
+.env.*
+!.env.example
+*.tgz
+release/

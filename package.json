@@ -1,0 +1,29 @@
+{
+  "name": "blockwright-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "tsc -b && npm run test --workspaces --if-present",
+    "test:live": "playwright test --config live/blockwright.config.ts",
+    "typecheck:live": "tsc -b && tsc -p live/tsconfig.json --noEmit",
+    "build:release": "node scripts/build-release.mjs",
+    "test:java": "./coverage-report/gradlew -p coverage-report test && ./neoforge-agent/gradlew -p neoforge-agent check",
+    "release:check": "npm test && npm run typecheck:live && cargo test --locked && npm run build:release && npm run test:release && npm run pack:check",
+    "pack:check": "node scripts/pack-check.mjs",
+    "version:release": "node scripts/version-release.mjs",
+    "test:release": "node --test scripts/release.test.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "packageManager": "npm@12.0.2"
+}

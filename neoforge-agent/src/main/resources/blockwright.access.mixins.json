@@ -1,0 +1,23 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.blockwright.api.access",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ServerConnectionListenerAccessor"
+  ],
+  "client": [
+    "CameraAccessor",
+    "ChatComponentAccessor",
+    "ClientPacketListenerAccessor",
+    "GuiAccessor",
+    "KeyboardHandlerAccessor",
+    "MouseHandlerAccessor",
+    "MultiPlayerGameModeAccessor",
+    "SoundEngineAccessor",
+    "SoundManagerAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

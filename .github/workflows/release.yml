@@ -1,0 +1,37 @@
+name: Release
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish verified packages to npm (select a vVERSION tag as the workflow ref)'
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    if: inputs.publish
+    needs: verify
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm install --global npm@12.0.2
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: release
+      - name: Publish tested archives using npm trusted publishing
+        run: node scripts/publish.mjs
