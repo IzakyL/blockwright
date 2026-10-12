@@ -209,3 +209,49 @@ export function reflectRelease(
 ): Promise<{ released: number }> {
   return handle.run(REFLECT_RELEASE, typeof target === "string" ? { handle: target } : { all: true }, options);
 }
+
+export interface ReflectDumpSpec {
+  /** The object to dump: an entity, a block entity, a player, a level, or a handle from an earlier query. */
+  target: ReflectRoot;
+  dimension?: string;
+  /** How deep and wide the value walker goes. */
+  limits?: ValueLimits;
+}
+
+export interface ReflectDump {
+  found: boolean;
+  /** The object's fields as a value tree, within the limits; undefined when it was not found. */
+  tree: unknown;
+}
+
+/**
+ * The whole object behind `target` as a value tree (its fields, walked by the value walker within `limits`),
+ * for looking at state no query path was written for. A {@link reflectQuery} reads chosen paths and is the
+ * cheaper call once the paths are known.
+ */
+export async function reflectDump(handle: MinecraftInstance, spec: ReflectDumpSpec, options: CallOptions = {}): Promise<ReflectDump> {
+  const { target, dimension, limits } = spec;
+  let held: string | undefined;
+  let pinned = false;
+  if (target.kind === "handle" && target.path === undefined) {
+    held = target.handle;
+  } else {
+    const root = await reflectQuery(handle, { root: target, select: {}, handles: true, ...(dimension !== undefined ? { dimension } : {}) }, options);
+    const found = root as { found?: boolean; tree?: { handle?: string } };
+    if (found.found === false || !found.tree?.handle) return { found: false, tree: undefined };
+    held = found.tree.handle;
+    pinned = true;
+  }
+  try {
+    const dumped = await reflectInvoke(handle, {
+      target: { kind: "static", className: "java.util.Objects" },
+      method: "requireNonNull",
+      args: [{ $handle: held }],
+      argTypes: ["java.lang.Object"],
+      ...(limits !== undefined ? { limits } : {}),
+    }, options);
+    return { found: true, tree: dumped.returned };
+  } finally {
+    if (pinned) await reflectRelease(handle, held).catch(() => undefined);
+  }
+}

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 
 export interface FfmpegEncodeSpec {
   width: number;
@@ -127,4 +128,68 @@ export function describeFfmpegFailure(what: string, outcome: FfmpegOutcome): str
   const status = outcome.signal ? `signal ${outcome.signal}` : `exit ${outcome.code}`;
   const stderr = outcome.stderr ? `: ${outcome.stderr.split("\n").slice(0, 8).join(" | ")}` : "";
   return `${what} (${status})${stderr}`;
+}
+
+export interface VideoProbe {
+  /** The file's duration; null when it is missing or ffprobe could not read it. */
+  durationS: number | null;
+  /** The share of the duration ffmpeg's blackdetect found black (0 when it was not checked). */
+  blackFraction: number;
+  /** `ok`, or why black was not measured: `missing` (no file), `unavailable` (ffmpeg did not run), `no-duration`. */
+  blackCheck: "ok" | "missing" | "unavailable" | "no-duration";
+}
+
+export interface ProbeVideoOptions {
+  /** Default `ffprobe` and `ffmpeg` on PATH. */
+  ffprobe?: string;
+  ffmpeg?: string;
+  /** A stretch counts as black from this many seconds (default 0.2) with pixels below this luminance share (default 0.10). */
+  blackMinSeconds?: number;
+  blackPixelThreshold?: number;
+}
+
+/** The black stretches blackdetect reported in ffmpeg's stderr, in seconds. */
+export function blackSeconds(stderr: string): number {
+  let black = 0;
+  for (const match of stderr.matchAll(/black_duration:\s*([0-9.]+)/g)) black += Number.parseFloat(match[1]!);
+  return black;
+}
+
+function capture(command: string, args: readonly string[], stream: "stdout" | "stderr"): Promise<string | null> {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(command, args, { stdio: ["ignore", stream === "stdout" ? "pipe" : "ignore", stream === "stderr" ? "pipe" : "ignore"] });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let text = "";
+    const pipe = stream === "stdout" ? child.stdout : child.stderr;
+    pipe?.setEncoding("utf8");
+    pipe?.on("data", (chunk: string) => {
+      if (text.length < 1_000_000) text += chunk;
+    });
+    child.once("error", () => resolve(null));
+    child.once("close", (code) => resolve(code === 0 ? text : null));
+  });
+}
+
+/**
+ * Whether a recording is a film and not a black file: its duration (ffprobe) and how much of it is black
+ * (ffmpeg's blackdetect), for a test to assert on. Never throws: what could not be measured is said in
+ * `blackCheck`.
+ */
+export async function probeVideo(path: string, options: ProbeVideoOptions = {}): Promise<VideoProbe> {
+  if (!existsSync(path)) return { durationS: null, blackFraction: 0, blackCheck: "missing" };
+  const said = await capture(options.ffprobe ?? "ffprobe",
+    ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path], "stdout");
+  const parsed = said === null ? Number.NaN : Number.parseFloat(said.trim());
+  const durationS = Number.isFinite(parsed) ? parsed : null;
+  const detect = `blackdetect=d=${options.blackMinSeconds ?? 0.2}:pix_th=${(options.blackPixelThreshold ?? 0.1).toFixed(2)}`;
+  const stderr = await capture(options.ffmpeg ?? "ffmpeg",
+    ["-hide_banner", "-nostats", "-i", path, "-vf", detect, "-an", "-f", "null", "-"], "stderr");
+  if (stderr === null) return { durationS, blackFraction: 0, blackCheck: "unavailable" };
+  if (durationS === null || durationS <= 0) return { durationS, blackFraction: 0, blackCheck: "no-duration" };
+  return { durationS, blackFraction: Math.min(1, blackSeconds(stderr) / durationS), blackCheck: "ok" };
 }

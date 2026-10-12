@@ -24,9 +24,18 @@ export {
   type WorldNearPlayerOptions as NearPlayerOptions,
   type WorldNearPlayer as NearPlayer,
 } from "../world/queries.js";
-export { worldCommand as command, worldProbe as probe, type WorldCommandOptions as CommandOptions } from "../world/commands.js";
+export {
+  worldCommand as command,
+  worldProbe as probe,
+  tryCommand,
+  type WorldCommandOptions as CommandOptions,
+  type CommandOutcome,
+} from "../world/commands.js";
+export { keepSave, SAVE_PER_RUN, type KeepSaveOptions, type KeptSave } from "../world/save.js";
 export {
   waitFor,
+  tryWaitFor,
+  type WaitForOutcome,
   type WaitForOptions,
   type WaitForResult,
   type WorldCondition as Condition,

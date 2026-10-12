@@ -4,6 +4,7 @@ export {
   screenWidgets as widgets,
   containerSlots as slots,
   waitForScreen as waitFor,
+  tryWaitForScreen as tryWaitFor,
   waitForWidget,
   clickWidget,
   clickSlot,

@@ -41,6 +41,7 @@ export {
   type TaskErrorContext,
 } from "./core/errors.js";
 export { MinecraftCommandError } from "./world/commands.js";
+export { attempt, isRefusal, instanceLost, type Refusal, type AttemptOptions } from "./attempt.js";
 export { MinecraftRecordingError } from "./media/recording.js";
 export { aimGeometry, type AimGeometry, type AimGeometryOptions, type Vec3, type CameraAngles, type CameraPose, type Direction } from "./core/geometry.js";
 export type {

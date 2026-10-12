@@ -5,6 +5,7 @@
     { "path": "packages/blockwright-ui" },
     { "path": "packages/blockwright-minecraft" },
     { "path": "packages/blockwright-mcp" },
-    { "path": "packages/blockwright-test" }
+    { "path": "packages/blockwright-test" },
+    { "path": "packages/blockwright-cinema" }
   ]
 }

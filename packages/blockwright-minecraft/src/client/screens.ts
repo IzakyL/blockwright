@@ -1,5 +1,6 @@
 import { globMatches } from "@izakyl/blockwright-client";
 import type { CallOptions, MinecraftClient } from "../core/index.js";
+import { isMinecraftError } from "../core/errors.js";
 import { defined, waitBudget } from "../core/templates.js";
 import { clientTask } from "./module.js";
 import type {
@@ -57,6 +58,19 @@ const WAIT_SCREEN = clientTask<{ className: string; wait: { timeoutMs: number } 
 export function waitForScreen(client: MinecraftClient, className: string, options: ScreenWaitOptions = {}): Promise<ScreenInfo> {
   const { wait, run } = waitBudget(options.timeoutMs, options.signal);
   return client.run(WAIT_SCREEN, { className, wait }, run);
+}
+
+/**
+ * {@link waitForScreen} that answers `null` when no such screen opened in time instead of throwing; without a
+ * `className` it waits for any screen.
+ */
+export async function tryWaitForScreen(client: MinecraftClient, className = "", options: ScreenWaitOptions = {}): Promise<ScreenInfo | null> {
+  try {
+    return await waitForScreen(client, className, options);
+  } catch (error) {
+    if (isMinecraftError(error, "wait-timeout")) return null;
+    throw error;
+  }
 }
 
 export interface WidgetWaitOptions extends ScreenWaitOptions {

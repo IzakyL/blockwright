@@ -42,4 +42,5 @@ export {
   type WaitForSoundsOptions,
   type WaitForSoundsResult,
 } from "../media/sound.js";
+export { probeVideo, type VideoProbe, type ProbeVideoOptions } from "../media/ffmpeg.js";
 export { encodePng, decodePng, distinctColors, type RgbaImage } from "../media/png.js";

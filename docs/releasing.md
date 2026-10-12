@@ -1,6 +1,6 @@
 # Releasing Blockwright
 
-Only the five packages under `packages/` are published; the root workspace stays
+Only the six packages under `packages/` are published; the root workspace stays
 `private: true`. Publishing requires write access to the `@izakyl` npm scope.
 
 ## Verify locally
@@ -13,7 +13,7 @@ npm run release:check
 ```
 
 This runs TypeScript and Rust tests, live type checking, clean TypeScript/native
-builds, Java tests and Java-module compile checks, then packs and installs all five
+builds, Java tests and Java-module compile checks, then packs and installs all six
 archives in a temporary consumer project. CLI execution, MCP handshake, bundled
 Java source loading, declaration resolution and native driver ping must pass.
 All builds are strict: missing/old JARs, mismatched versions, modified native
@@ -46,6 +46,7 @@ in dependency order:
 3. `@izakyl/blockwright-minecraft`
 4. `@izakyl/blockwright-test`
 5. `@izakyl/blockwright-mcp`
+6. `@izakyl/blockwright-cinema`
 
 Use `npm publish release/<archive>.tgz --access public` for each archive, with
 `--tag next` for prereleases.
@@ -65,7 +66,7 @@ The workflow first completes CI, including both Node installation checks and the
 history scan, then publishes the same verified archives in dependency order.
 It checks tag/version agreement and archive hashes before writing to npm.
 
-Publishing five packages is not atomic. If a publish fails partway, check which
+Publishing six packages is not atomic. If a publish fails partway, check which
 packages reached the registry and publish only the missing ones from the same
 verified archives. A published npm version cannot be replaced, so do not bump the
 version to retry.

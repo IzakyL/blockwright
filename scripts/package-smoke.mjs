@@ -7,6 +7,7 @@ import { CORE, CLIENT, WORLD, MEDIA } from '@izakyl/blockwright-minecraft';
 import '@izakyl/blockwright-ui';
 import '@izakyl/blockwright-test';
 import '@izakyl/blockwright-mcp';
+import '@izakyl/blockwright-cinema';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 const require = createRequire(import.meta.url);

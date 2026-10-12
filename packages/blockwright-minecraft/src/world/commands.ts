@@ -1,4 +1,6 @@
+import { errorSummary } from "@izakyl/blockwright-client";
 import type { CallOptions, MinecraftServer, RunTemplateOptions } from "../core/index.js";
+import { MinecraftTaskError } from "../core/errors.js";
 import { defined } from "../core/templates.js";
 import { worldTask } from "./module.js";
 import type { CommandResult, ProbeVerdict } from "./types.js";
@@ -86,4 +88,23 @@ export async function worldProbe(server: MinecraftServer, condition: string, opt
       "selector or item id, or an out-of-range coordinate. This is NOT the same as the condition being false.");
   }
   return verdict.verdict === "true";
+}
+
+/** What {@link tryCommand} answers: the command's result, or why it could not be run at all. */
+export type CommandOutcome =
+  | (CommandResult & { status: "ok" })
+  | { status: "error"; command: string; success: false; output: string[]; reason: string };
+
+/**
+ * {@link worldCommand} that never throws for what the game answered: a command that did not succeed answers
+ * `status: "ok"` with `success: false` and what the game said, and one that could not be run (the task
+ * failed) answers `status: "error"` with the reason. A lost instance still throws.
+ */
+export async function tryCommand(server: MinecraftServer, command: string, options: CallOptions = {}): Promise<CommandOutcome> {
+  try {
+    return { ...(await worldCommand(server, command, { ...options, allowFailure: true })), status: "ok" };
+  } catch (error) {
+    if (!(error instanceof MinecraftTaskError)) throw error;
+    return { status: "error", command, success: false, output: [], reason: errorSummary(error) };
+  }
 }

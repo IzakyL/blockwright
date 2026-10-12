@@ -17,6 +17,7 @@ supported release matrix. See [environment setup](docs/environment.md).
 | `@izakyl/blockwright-ui` | Shared UI adapter contracts and interaction host |
 | `@izakyl/blockwright-test` | Playwright fixtures and failure evidence |
 | `@izakyl/blockwright-mcp` | MCP stdio server and `blockwright-mcp` command |
+| `@izakyl/blockwright-cinema` | Camera paths, time curves and frame-stepped timelapse capture |
 
 ## Quick start
 

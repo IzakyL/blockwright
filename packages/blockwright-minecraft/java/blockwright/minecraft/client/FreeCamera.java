@@ -211,6 +211,7 @@ public final class FreeCamera {
         path = null;
         View.releaseFov();
         boolean wasClean = View.setClean(mc, false);
+        View.setHudHidden(mc, false);
         if (mc.player != null) {
             mc.setCameraEntity(mc.player);
         }
@@ -251,6 +252,28 @@ public final class FreeCamera {
             }
         }
         player.setYBodyRot(yaw);
+    }
+
+    /**
+     * {@code {fov?}}: holds the field of view at {@code fov} (30..110) in the player's own view or a free
+     * camera's, until it is released by a call without one (or {@link #reset}). Answers {@code {fov, held}}.
+     */
+    public static Map<String, Object> fov(Context ctx, Args args) {
+        Minecraft mc = ClientGame.mc(ctx);
+        if (args.has("fov")) {
+            View.holdFov(mc, args.number("fov"));
+        } else {
+            View.releaseFov();
+        }
+        return obj("fov", mc.options.fov().get(), "held", View.fovHeld());
+    }
+
+    /** {@code {hidden}}: hides the GUI or shows it again (see {@link View#setHudHidden}). Answers {@code {hidden, was}}. */
+    public static Map<String, Object> hud(Context ctx, Args args) {
+        Minecraft mc = ClientGame.mc(ctx);
+        boolean hidden = args.flag("hidden", true);
+        boolean was = View.setHudHidden(mc, hidden);
+        return obj("hidden", hidden, "was", was);
     }
 
     public static Map<String, Object> clean(Context ctx, Args args) {

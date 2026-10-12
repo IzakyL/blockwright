@@ -1,4 +1,5 @@
 import { defineTask, javaTask, type MinecraftServer, type PrefabModule, type WaitProgress } from "../core/index.js";
+import { MinecraftTimeoutError } from "../core/errors.js";
 import { probeCommand } from "./commands.js";
 import { deadlineAbove, defined } from "../core/templates.js";
 import { WORLD, worldTask } from "./module.js";
@@ -123,4 +124,29 @@ export function waitFor<T = unknown, C extends WorldCondition = WorldCondition>(
     source: worldWaitSource(check),
   });
   return server.run(template, { ...common, args: check.args ?? {} }, runOptions);
+}
+
+/** What {@link tryWaitFor} answers: whether the condition held, the world ticks it took, and which budget ran out when it did not. */
+export type WaitForOutcome<T> =
+  | ({ matched: true; reason: "matched" } & WaitForResult<T>)
+  | { matched: false; reason: "maxTicks" | "timeoutMs" | "timeout"; ticks: number; last?: unknown };
+
+/**
+ * {@link waitFor} that answers a wait that ran out instead of throwing, for waits whose outcome is evidence
+ * to judge afterwards. A condition the game cannot evaluate still throws.
+ */
+export async function tryWaitFor<T = unknown, C extends WorldCondition = WorldCondition>(
+  server: MinecraftServer, until: C, options: WaitForOptions = {},
+): Promise<WaitForOutcome<C extends WorldCheck ? T : WorldCommandValue>> {
+  try {
+    return { matched: true, reason: "matched", ...(await waitFor<T, C>(server, until, options)) };
+  } catch (error) {
+    if (!(error instanceof MinecraftTimeoutError) || error.code === "settle-timeout") throw error;
+    return {
+      matched: false,
+      reason: error.reason ?? "timeout",
+      ticks: error.ticks ?? (error.reason === "maxTicks" ? options.maxTicks ?? DEFAULT_WAIT_FOR_MAX_TICKS : 0),
+      ...(error.last !== undefined ? { last: error.last } : {}),
+    };
+  }
 }

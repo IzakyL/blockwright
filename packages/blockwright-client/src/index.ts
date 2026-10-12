@@ -41,5 +41,7 @@ export type {
   InstanceRole,
 } from "./types-launch.js";
 export { globMatches } from "./glob.js";
+export { instanceDirOf, seedInstance } from "./seed.js";
+export type { InstanceSeed, SeedCopyOptions, SeedInstanceOptions } from "./seed.js";
 export { coverageReport, coverageReset } from "./coverage.js";
 export type { CoverageOptions, CoverageReportOptions } from "./coverage.js";

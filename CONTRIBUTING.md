@@ -19,7 +19,7 @@ npm run build:release
 npm run pack:check
 ```
 
-`pack:check` installs all five archives in a temporary directory outside the
+`pack:check` installs all six archives in a temporary directory outside the
 workspace, checks imports and declarations, reads packaged Java sources, runs a
 driver ping and verifies MCP CLI execution and a protocol handshake. Verified
 archives are copied into ignored `release/`. It needs registry access for external

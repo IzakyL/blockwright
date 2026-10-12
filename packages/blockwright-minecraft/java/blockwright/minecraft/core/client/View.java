@@ -21,7 +21,7 @@ import net.minecraft.client.Options;
  *
  * <ul>
  * <li><b>for a run</b> ({@link #forRun}): released when the run ends — a screenshot's posed camera;</li>
- * <li><b>held</b> ({@link #holdCamera}, {@link #holdFov}, {@link #setClean}): kept across runs until released —
+ * <li><b>held</b> ({@link #holdCamera}, {@link #holdFov}, {@link #setClean}, {@link #setHudHidden}): kept across runs until released —
  *     a free camera set by one task and cleared by a later one. The held claims live in this class's statics,
  *     in the client core module, which is loaded first and not reloaded when area modules change, so a reload
  *     of an area never strands a claim.</li>
@@ -35,6 +35,7 @@ public final class View {
     private static Registration heldCamera;
     private static Registration heldFov;
     private static Registration heldClean;
+    private static Registration heldHud;
 
     private View() {
     }
@@ -167,6 +168,31 @@ public final class View {
 
     public static boolean isClean() {
         return heldClean != null;
+    }
+
+    public static boolean fovHeld() {
+        return heldFov != null;
+    }
+
+    /**
+     * Hides the GUI (the HUD and the hand's overlays, as F1 does) or shows it again, leaving the rest of the view
+     * as it is; the setting from before it was hidden is restored when it is shown. Answers whether it was
+     * hidden through here before.
+     */
+    public static boolean setHudHidden(Minecraft mc, boolean hidden) {
+        boolean was = heldHud != null;
+        if (hidden && !was) {
+            heldHud = hideGui(mc);
+        } else if (!hidden && was) {
+            Registration held = heldHud;
+            heldHud = null;
+            held.close();
+        }
+        return was;
+    }
+
+    public static boolean hudHidden() {
+        return heldHud != null;
     }
 
     private static Registration once(Runnable restore) {

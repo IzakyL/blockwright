@@ -105,3 +105,38 @@ const STATE = clientTask<void, CameraState>("camera.state", "return FreeCamera.s
 export function cameraState(client: MinecraftClient, options: CallOptions = {}): Promise<CameraState> {
   return client.run(STATE, undefined, options);
 }
+
+export interface CameraFovResult {
+  /** The field of view the game has now. */
+  fov: number;
+  /** Whether it is held (false after a release). */
+  held: boolean;
+}
+
+const FOV = clientTask<{ fov?: number }, CameraFovResult>("camera.fov", "return FreeCamera.fov(ctx, Args.of(ctx));");
+
+/**
+ * Holds the field of view at `fov` (30..110) without detaching the camera: the player's own view, zoomed. A
+ * free camera's `fov` holds the same setting. `null` releases it, restoring the setting from before the first
+ * hold, as {@link cameraReset} does.
+ */
+export function cameraFov(client: MinecraftClient, fov: number | null, options: CallOptions = {}): Promise<CameraFovResult> {
+  return client.run(FOV, fov === null ? {} : { fov }, options);
+}
+
+export interface CameraHudResult {
+  hidden: boolean;
+  /** Whether it was hidden through here before. */
+  was: boolean;
+}
+
+const HUD = clientTask<{ hidden: boolean }, CameraHudResult>("camera.hud", "return FreeCamera.hud(ctx, Args.of(ctx));");
+
+/**
+ * Shows the GUI (the HUD, the hand, the crosshair) or hides it as F1 does, and nothing else: {@link cameraClean}
+ * also takes away shake, toasts, view bobbing and clouds and pulls the fog in. Hidden through here it stays
+ * hidden until shown again or {@link cameraReset}.
+ */
+export function cameraHud(client: MinecraftClient, visible: boolean, options: CallOptions = {}): Promise<CameraHudResult> {
+  return client.run(HUD, { hidden: !visible }, options);
+}

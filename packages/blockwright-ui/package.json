@@ -1,6 +1,6 @@
 {
   "name": "@izakyl/blockwright-ui",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -22,7 +22,7 @@
     "prepack": "npm run build && node ../../scripts/check-package.mjs"
   },
   "dependencies": {
-    "@izakyl/blockwright-client": "0.1.0-alpha.0"
+    "@izakyl/blockwright-client": "0.1.0-alpha.1"
   },
   "description": "Composable UI observation and interaction for Blockwright",
   "engines": {

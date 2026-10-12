@@ -1,6 +1,6 @@
 {
   "name": "@izakyl/blockwright-test",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -28,9 +28,9 @@
     "@playwright/test": "^1.60.0"
   },
   "dependencies": {
-    "@izakyl/blockwright-client": "0.1.0-alpha.0",
-    "@izakyl/blockwright-minecraft": "0.1.0-alpha.0",
-    "@izakyl/blockwright-ui": "0.1.0-alpha.0"
+    "@izakyl/blockwright-client": "0.1.0-alpha.1",
+    "@izakyl/blockwright-minecraft": "0.1.0-alpha.1",
+    "@izakyl/blockwright-ui": "0.1.0-alpha.1"
   },
   "description": "Playwright fixtures and failure evidence for Blockwright game tests",
   "engines": {

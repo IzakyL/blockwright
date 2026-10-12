@@ -21,6 +21,7 @@ export { isActionable, widgetInState } from "./client/screens.js";
 export { mediaTask } from "./media/module.js";
 export {
   audioBytesAt,
+  blackSeconds,
   ffmpegEncodeArgs,
   ffmpegMuxArgs,
   wavHeader,
