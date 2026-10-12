@@ -35,11 +35,11 @@ Review package manifests, Cargo.lock and both Gradle versions, and update
 CHANGELOG.md. The MCP server reads its version from its package metadata.
 Re-run verification after version changes.
 
-## First publication
+## Publish
 
-npm trusted publishing can only be configured for packages that already exist, so
-the first version of each package is published by hand from the verified archives,
-in dependency order:
+Publishing is done by hand, from the archives `release:check` verified. Commit the
+verified source and create a `vVERSION` tag matching every package, then publish the
+archives in dependency order:
 
 1. `@izakyl/blockwright-client`
 2. `@izakyl/blockwright-ui`
@@ -48,23 +48,20 @@ in dependency order:
 5. `@izakyl/blockwright-mcp`
 6. `@izakyl/blockwright-cinema`
 
-Use `npm publish release/<archive>.tgz --access public` for each archive, with
-`--tag next` for prereleases.
+```sh
+npm login
+for p in client ui minecraft test mcp cinema; do
+  npm publish ./release/izakyl-blockwright-$p-VERSION.tgz --access public --tag next
+done
+```
 
-Then, in each package's npm settings, trust this GitHub repository, `release.yml`
-and the `npm` environment (see npm's [trusted publishing instructions](https://docs.npmjs.com/trusted-publishers/)),
-and create the `npm` environment in GitHub with any reviewer rules you want. The
-workflow uses `id-token: write` and needs no long-lived npm token; provenance is
-generated automatically.
+Keep the leading `./`: without it npm reads `release/<archive>.tgz` as a GitHub
+`owner/repo` shorthand and refuses it. Use `--tag next` for prereleases and
+`--tag latest` otherwise. The first version of a new package is tagged `latest`
+whatever `--tag` says; move a tag afterwards with `npm dist-tag add`.
 
-## Subsequent releases
-
-Commit the verified source and create a `vVERSION` tag matching every package.
-Select that tag in GitHub's Release workflow. The default `publish=false` verifies
-and uploads archives without publishing; explicitly set it true for publication.
-The workflow first completes CI, including both Node installation checks and the
-history scan, then publishes the same verified archives in dependency order.
-It checks tag/version agreement and archive hashes before writing to npm.
+Check `release/verified.json` before publishing: its version and archive hashes must
+match what `release:check` just produced.
 
 Publishing six packages is not atomic. If a publish fails partway, check which
 packages reached the registry and publish only the missing ones from the same
