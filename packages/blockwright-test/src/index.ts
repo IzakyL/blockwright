@@ -103,9 +103,12 @@ export function createGameTest(options: GameTestOptions = {}) {
               });
             }
           } finally {
-            await game.close();
+            try {
+              await game.close();
+            } finally {
+              await attachCrashes(testInfo, game);
+            }
           }
-          await attachCrashes(testInfo, game);
         }
       },
       { scope: "test" },

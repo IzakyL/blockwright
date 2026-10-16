@@ -256,7 +256,7 @@ each answering `{ok}` or `{error}`, and `reflect.release` frees handles.
   `beforeAll` with the offscreen config, serial tests, distinct instance names
   (`mc-world-s`/`-c`, …) and traces under `test-results/`. Build first: `npm run build -w @izakyl/blockwright-client`
   and `npx tsc -b packages/blockwright-minecraft` (the driver binary and agent jar come from
-  `npm run build:release`, only needed after Rust/agent changes). Run one spec:
+  `npm run build:native`, `npm run build:agents`, then `npm run build:dev`, only needed after Rust/agent changes). Run one spec:
   `npx playwright test --config live/blockwright.config.ts live/minecraft-world.spec.ts`. Each launch
   starts its own driver and servers bind ephemeral ports, so specs of different areas can run at the same
   time, but a pair takes ~4 GB of RAM.

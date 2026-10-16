@@ -440,7 +440,8 @@ mod tests {
 
     #[tokio::test]
     async fn trace_notifications_go_to_the_trace() {
-        let sink = TraceSink::create("/dev/null", "traced").unwrap();
+        let sink =
+            TraceSink::create(if cfg!(windows) { "NUL" } else { "/dev/null" }, "traced").unwrap();
         let mut events = sink.subscribe();
         let lines = concat!(
             r#"{"method":"trace","params":{"name":"blockwright.lifecycle.ready","data":{"x":1}}}"#,

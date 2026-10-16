@@ -23,6 +23,10 @@ pub struct InstanceRecord {
     pub config: Option<PathBuf>,
     #[serde(default)]
     pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
 }
 
 pub fn registry_dir(root: &Path) -> PathBuf {
@@ -60,7 +64,18 @@ pub fn list(root: &Path) -> Vec<InstanceRecord> {
             .ok()
             .and_then(|body| serde_json::from_slice::<InstanceRecord>(&body).ok())
         {
-            Some(record) if crate::process::running(record.pid) => records.push(record),
+            Some(record)
+                if record
+                    .platform
+                    .as_deref()
+                    .is_some_and(|platform| platform != crate::platform::TARGET)
+                    || crate::process::matches_identity(
+                        record.pid,
+                        record.process_identity.as_deref(),
+                    ) =>
+            {
+                records.push(record)
+            }
             _ => {
                 let _ = fs::remove_file(&path);
             }
@@ -124,6 +139,8 @@ mod tests {
             trace_path: None,
             config: None,
             started_at: "2026-01-01T00:00:00Z".to_string(),
+            process_identity: None,
+            platform: None,
         }
     }
 
@@ -139,6 +156,20 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].instance_id, "mcp-client");
         assert_eq!(listed[0].role, InstanceRole::Server);
+    }
+
+    #[test]
+    fn reused_pid_is_pruned_but_an_unknown_platform_is_preserved() {
+        let tmp = TempDir::new("registry-identity");
+        let mut reused = record("reused", std::process::id());
+        reused.process_identity = Some("wrong-creation-identity".to_string());
+        reused.platform = Some(crate::platform::TARGET.to_string());
+        write(tmp.path(), &reused).unwrap();
+        assert!(list(tmp.path()).is_empty());
+        let mut foreign = reused;
+        foreign.platform = Some("another-platform".to_string());
+        write(tmp.path(), &foreign).unwrap();
+        assert_eq!(list(tmp.path()).len(), 1);
     }
 
     #[test]

@@ -66,7 +66,9 @@ test("a client with no display server renders, takes input, records and plays", 
     const plan = clientTrace.find((entry) => entry.name === "lifecycle.launch.plan")?.data;
     report.launch_env_display = plan?.env?.DISPLAY ?? null;
     expect(plan?.env?.DISPLAY, "an offscreen client is launched with no DISPLAY in its environment").toBeUndefined();
-    expect(plan?.args, "the render device reaches the JVM as a property, before the control channel exists")
+    const argumentsText = (plan?.args ?? []).map((arg: string) => arg.startsWith("@")
+      ? readFileSync(path.resolve(plan.cwd, arg.slice(1)), "utf8") : arg).join("\n");
+    expect(argumentsText, "the render device reaches the JVM as a property, before the control channel exists")
       .toContain("-Dblockwright.display.device=auto");
     expect(plan?.env?.ALSOFT_DRIVERS, "OpenAL-soft enumerates no real backend").toBe("null");
 
@@ -134,6 +136,8 @@ test("a client with no display server renders, takes input, records and plays", 
   }
 });
 
+softwareTest.describe("Linux software rendering", () => {
+softwareTest.skip(process.platform === "win32", "Windows candidate requires a GPU; software/EGL is Linux-only");
 softwareTest("device = \"software\" renders on the software rasterizer, not on whatever auto picks", async ({ client, game }, testInfo) => {
   softwareTest.setTimeout(900_000);
   const report: Record<string, unknown> = {};
@@ -158,4 +162,5 @@ softwareTest("device = \"software\" renders on the software rasterizer, not on w
   } finally {
     await testInfo.attach("offscreen-software-report.json", { body: JSON.stringify(report, null, 2), contentType: "application/json" });
   }
+});
 });

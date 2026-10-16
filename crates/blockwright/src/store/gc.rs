@@ -10,6 +10,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use super::{cache::Cache, live_refs, StoreLock, RUNTIME_DIR};
+use crate::platform::fs as platform_fs;
 use crate::registry;
 
 pub struct GcScope<'a> {
@@ -51,9 +52,9 @@ pub fn gc(scope: &GcScope<'_>, dry_run: bool) -> Result<Option<GcReport>> {
     }
     doomed.extend(
         children(scope.instances_dir)
-            .filter(|path| !owned.contains(path) && !path.join(KEEP_MARKER).exists()),
+            .filter(|path| !is_owned(&owned, path) && !path.join(KEEP_MARKER).exists()),
     );
-    doomed.extend(children(scope.traces_dir).filter(|path| !owned.contains(path)));
+    doomed.extend(children(scope.traces_dir).filter(|path| !is_owned(&owned, path)));
 
     let mut report = GcReport::default();
     for path in doomed {
@@ -72,6 +73,13 @@ pub fn gc(scope: &GcScope<'_>, dry_run: bool) -> Result<Option<GcReport>> {
     Ok(Some(report))
 }
 
+fn is_owned(owned: &HashSet<PathBuf>, path: &Path) -> bool {
+    owned.contains(path)
+        || owned
+            .iter()
+            .any(|owner| platform_fs::same_file(owner, path))
+}
+
 /// Marks an instance dir launched with keepInstanceDir, which gc leaves alone even once its
 /// game is gone.
 pub const KEEP_MARKER: &str = ".blockwright-keep";
@@ -82,7 +90,7 @@ pub fn mark_kept(instance_dir: &Path, keep: bool) -> Result<()> {
     let result = if keep {
         fs::write(&marker, b"kept\n")
     } else {
-        match fs::remove_file(&marker) {
+        match platform_fs::remove_file(&marker) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             other => other,
         }
@@ -101,17 +109,17 @@ fn children(dir: &Path) -> impl Iterator<Item = PathBuf> {
 /// Moves a dir aside before deleting it, so an interrupted delete never leaves a half-empty
 /// runtime base or cache entry where a launch would take it as complete.
 fn remove(path: &Path) -> Result<()> {
-    if !path.is_dir() {
-        return fs::remove_file(path)
+    let meta = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return platform_fs::remove_file(path)
             .with_context(|| format!("failed to remove {}", path.display()));
     }
     let trash = path.with_file_name(format!(".trash-{}", Uuid::new_v4()));
-    let target = if fs::rename(path, &trash).is_ok() {
-        &trash
-    } else {
-        path
-    };
-    fs::remove_dir_all(target).with_context(|| format!("failed to remove {}", path.display()))
+    fs::rename(path, &trash)
+        .with_context(|| format!("failed to move {} aside for deletion", path.display()))?;
+    platform_fs::remove_dir_all(&trash)
+        .with_context(|| format!("failed to remove {}", path.display()))
 }
 
 #[cfg(test)]
@@ -203,10 +211,12 @@ mod tests {
                 instance_id: "running".to_string(),
                 role: InstanceRole::Server,
                 pid: std::process::id(),
+                process_identity: None,
+                platform: None,
                 instance_dir: layout.instances.join("running"),
                 trace_path: Some(layout.traces.join("running.ndjson")),
                 config: None,
-                    started_at: String::new(),
+                started_at: String::new(),
             },
         )
         .unwrap();
@@ -237,10 +247,12 @@ mod tests {
                 instance_id: "died".to_string(),
                 role: InstanceRole::Server,
                 pid: 4_294_000_000,
+                process_identity: None,
+                platform: None,
                 instance_dir: layout.instances.join("died"),
                 trace_path: None,
                 config: None,
-                    started_at: String::new(),
+                started_at: String::new(),
             },
         )
         .unwrap();
@@ -265,5 +277,58 @@ mod tests {
         assert!(run(&layout, false).is_none());
         drop(held);
         assert!(run(&layout, false).is_some());
+    }
+
+    #[test]
+    fn gc_keeps_instances_recorded_by_another_platform() {
+        let layout = layout("gc-foreign-platform");
+        layout.tmp.write("instances/foreign/options.txt", "kept");
+        registry::write(
+            layout.tmp.path(),
+            &InstanceRecord {
+                instance_id: "foreign".to_string(),
+                role: InstanceRole::Server,
+                pid: 4_294_000_000,
+                process_identity: None,
+                platform: Some("foreign-platform".to_string()),
+                instance_dir: layout.instances.join("foreign"),
+                trace_path: None,
+                config: None,
+                started_at: String::new(),
+            },
+        )
+        .unwrap();
+
+        let report = run(&layout, false).unwrap();
+
+        assert!(layout.instances.join("foreign/options.txt").exists());
+        assert!(report.removed.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn gc_recognizes_owned_paths_with_different_casing() {
+        let layout = layout("gc-windows-casing");
+        layout.tmp.write("instances/Running/options.txt", "kept");
+        registry::write(
+            layout.tmp.path(),
+            &InstanceRecord {
+                instance_id: "running".to_string(),
+                role: InstanceRole::Server,
+                pid: std::process::id(),
+                process_identity: None,
+                platform: None,
+                instance_dir: layout.instances.join("RUNNING"),
+                trace_path: None,
+                config: None,
+                started_at: String::new(),
+            },
+        )
+        .unwrap();
+
+        let report = run(&layout, false).unwrap();
+
+        assert!(layout.instances.join("Running/options.txt").exists());
+        assert!(report.removed.is_empty());
     }
 }

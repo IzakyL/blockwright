@@ -17,10 +17,14 @@ interface JsonRpcResponse {
 export interface DriverOptions {
   /** The `blockwright` binary; default `$BLOCKWRIGHT_CLI`, the bundled one, else `blockwright` on PATH. */
   driverPath?: string;
+  /** Arguments before the `driver` subcommand, for an executable wrapper (for example Node plus a script). */
+  driverArgs?: readonly string[];
   /** The driver's working directory, which relative config and trace paths resolve against. Default `process.cwd()`. */
   cwd?: string;
   /** Default budget for a driver request that sets none; default 35000, null for none. Launch and close are never bounded. */
   requestTimeoutMs?: number | null;
+  /** Budget for EOF shutdown including game saves and output draining; default 75000. Timeout forces driver termination and rejects closeAsync. */
+  closeTimeoutMs?: number;
   /** Options for every instance's game connection. */
   game?: GameChannelOptions;
 }
@@ -48,6 +52,11 @@ export class BlockwrightDriver {
   private methods = new Map<number, string>();
   private instances = new Set<BlockwrightInstance>();
   private holds = 0;
+  private activeLaunches = 0;
+  private closing = false;
+  private closePromise?: Promise<void>;
+  private readonly completion: Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>;
+  private readonly closeTimeoutMs: number;
   private readonly channelOptions: GameChannelOptions;
   /** The driver answers one request at a time, so requests queue here and time out from when they are sent. */
   private queue: Promise<unknown> = Promise.resolve();
@@ -64,40 +73,64 @@ export class BlockwrightDriver {
     this.channelOptions = options.game ?? {};
     const driverPath = resolveBinaryPath(options.driverPath);
     this.cwd = options.cwd ?? process.cwd();
-    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    this.process = spawn(driverPath, ["driver"], {
+    this.requestTimeoutMs = options.requestTimeoutMs === undefined ? DEFAULT_REQUEST_TIMEOUT_MS : options.requestTimeoutMs;
+    this.closeTimeoutMs = options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
+    if (!Number.isFinite(this.closeTimeoutMs) || this.closeTimeoutMs <= 0) {
+      throw new RangeError("closeTimeoutMs must be a positive finite number");
+    }
+    this.process = spawn(driverPath, [...(options.driverArgs ?? []), "driver"], {
       cwd: this.cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
+      windowsHide: true,
     });
 
     this.process.stdout.on("data", (chunk: Buffer) => this.handleStdout(chunk));
     this.process.stderr.pipe(process.stderr);
-    this.process.once("error", (error) => {
-      this.rejectAllPending(error);
+    // A pipe can fail while the child is exiting. Handle its error even after pending requests ended.
+    this.process.stdin.on("error", (error) => {
+      this.failure ??= error;
+      this.rejectAllPending(this.failure);
     });
-    this.process.once("exit", (code, signal) => {
-      this.rejectAllPending(
-        new Error(`blockwright driver exited with code ${code ?? "null"} signal ${signal ?? "null"}`),
-      );
+    this.completion = new Promise((resolve) => {
+      let processError: Error | undefined;
+      this.process.on("error", (error) => {
+        processError ??= error;
+        this.failure ??= error;
+        this.rejectAllPending(this.failure);
+      });
+      this.process.once("exit", (code, signal) => {
+        this.failure ??= new Error(`blockwright driver exited with code ${code ?? "null"} signal ${signal ?? "null"}`);
+        this.rejectAllPending(this.failure);
+        this.abandonInstances();
+      });
+      // Unlike exit, close means the child has ended AND its output pipes have drained.
+      this.process.once("close", (code, signal) => resolve({ code, signal, error: processError }));
     });
   }
 
   async launchNeoForge(role: InstanceRole, options: InstanceLaunchOptions = {}): Promise<BlockwrightInstance> {
-    const result = await this.request<InstanceLaunchResult>("neoforge.launch", {
-      config: options.config,
-      role,
-      instance: options.instance,
-      trace: options.trace,
-      agentMod: options.agentMod ?? resolveBundledAgent("neoforge"),
-      startFrozen: options.startFrozen ?? true,
-      ...(options.reuseInstanceDir ? { reuseInstanceDir: true } : {}),
-      ...(options.keepInstanceDir ? { keepInstanceDir: true } : {}),
-    });
+    this.activeLaunches++;
+    try {
+      const result = await this.request<InstanceLaunchResult>("neoforge.launch", {
+        config: options.config,
+        role,
+        instance: options.instance,
+        trace: options.trace,
+        agentMod: options.agentMod ?? resolveBundledAgent("neoforge"),
+        startFrozen: options.startFrozen ?? true,
+        ...(options.reuseInstanceDir ? { reuseInstanceDir: true } : {}),
+        ...(options.keepInstanceDir ? { keepInstanceDir: true } : {}),
+      });
 
-    const instance = new BlockwrightInstance(this, result, this.channelOptions);
-    this.instances.add(instance);
-    return instance;
+      if (this.closing) throw new Error("blockwright driver is closing");
+      const instance = new BlockwrightInstance(this, result, this.channelOptions);
+      this.instances.add(instance);
+      return instance;
+    } finally {
+      this.activeLaunches--;
+      this.closeIfIdle();
+    }
   }
 
   ping(options: RequestOptions = {}): Promise<unknown> {
@@ -109,6 +142,7 @@ export class BlockwrightDriver {
    * driver answers one request at a time, so requests queue and each budget starts when it is sent.
    */
   request<T = unknown>(method: DriverMethod, params?: unknown, options: RequestOptions = {}): Promise<T> {
+    if (this.closing) return Promise.reject(new Error("blockwright driver is closing"));
     if (!DRIVER_METHODS.has(method)) {
       return Promise.reject(new Error(`${method} is not a driver method; game work goes through instance.run`));
     }
@@ -118,6 +152,7 @@ export class BlockwrightDriver {
   }
 
   private send<T>(method: string, params: unknown, options: RequestOptions): Promise<T> {
+    if (this.closing) return Promise.reject(new Error("blockwright driver is closing"));
     if (this.failure) return Promise.reject(this.failure);
     const id = this.nextId++;
     const message = JSON.stringify({
@@ -131,6 +166,7 @@ export class BlockwrightDriver {
     return new Promise<T>((resolveRequest, rejectRequest) => {
       const timer = timeoutMs === null ? undefined : setTimeout(() => {
         this.pending.delete(id);
+        this.methods.delete(id);
         this.failure ??= new BlockwrightRequestTimeoutError(method, timeoutMs);
         rejectRequest(this.failure);
       }, timeoutMs);
@@ -176,13 +212,61 @@ export class BlockwrightDriver {
     process.emitWarning(`blockwright driver ${kind}: ${detail} | ${diagnostic.line}`);
   }
 
+  /** Starts cooperative EOF shutdown. Use closeAsync to wait and observe cleanup failures. */
   close(): void {
+    void this.closeAsync();
+  }
+
+  /** Stops accepting work, sends stdin EOF, and waits for the driver and its output to close. Repeated calls share one promise. */
+  closeAsync(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closing = true;
+    this.rejectAllPending(new Error("blockwright driver is closing"));
+    this.abandonInstances();
+    this.process.stdin.end();
+    this.closePromise = this.waitForShutdown();
+    // close() and idle shutdown deliberately do not await; explicit callers still receive the rejection.
+    void this.closePromise.catch(() => {});
+    return this.closePromise;
+  }
+
+  private abandonInstances(): void {
     const instances = [...this.instances];
     this.instances.clear();
     for (const instance of instances) abandonInstance(instance);
-    if (this.process.exitCode === null) {
-      this.process.kill("SIGTERM");
-    }
+  }
+
+  private waitForShutdown(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let timedOut: Error | undefined;
+      let forceTimer: ReturnType<typeof setTimeout> | undefined;
+      const timer = setTimeout(() => {
+        timedOut = new Error(`blockwright driver shutdown timed out after ${this.closeTimeoutMs}ms; forced termination was required`);
+        if (this.process.exitCode === null && this.process.signalCode === null) {
+          try {
+            this.process.kill("SIGKILL");
+          } catch (cause) {
+            timedOut = new Error(`${timedOut.message}; termination failed`, { cause });
+          }
+        }
+        // A leaked inherited pipe or failed kill must not make closeAsync hang forever.
+        forceTimer = setTimeout(() => {
+          this.process.stdin.destroy();
+          this.process.stdout.destroy();
+          this.process.stderr.destroy();
+          reject(new Error(`${timedOut!.message}; process/output did not close within ${FORCE_CLOSE_TIMEOUT_MS}ms`));
+        }, FORCE_CLOSE_TIMEOUT_MS);
+      }, this.closeTimeoutMs);
+      this.completion.then(({ code, signal, error }) => {
+        clearTimeout(timer);
+        if (forceTimer !== undefined) clearTimeout(forceTimer);
+        if (timedOut) reject(timedOut);
+        else if (error) reject(error);
+        else if (code !== 0 || signal !== null) {
+          reject(new Error(`blockwright driver shutdown failed with code ${code ?? "null"} signal ${signal ?? "null"}`));
+        } else resolve();
+      });
+    });
   }
 
   /**
@@ -190,6 +274,7 @@ export class BlockwrightDriver {
    * until the returned function is called.
    */
   retain(): () => void {
+    if (this.closing) throw new Error("blockwright driver is closing");
     this.holds++;
     let released = false;
     return () => {
@@ -207,7 +292,7 @@ export class BlockwrightDriver {
   }
 
   private closeIfIdle(): void {
-    if (this.instances.size === 0 && this.holds === 0) {
+    if (this.instances.size === 0 && this.holds === 0 && this.activeLaunches === 0) {
       this.close();
     }
   }
@@ -282,6 +367,8 @@ export class BlockwrightDriver {
 
 /** Backstop for a driver request that declares no budget. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 35_000;
+const DEFAULT_CLOSE_TIMEOUT_MS = 75_000;
+const FORCE_CLOSE_TIMEOUT_MS = 5_000;
 const PROTOCOL_DIAGNOSTIC_LINE_LIMIT = 200;
 const MAX_PROTOCOL_DIAGNOSTICS = 100;
 

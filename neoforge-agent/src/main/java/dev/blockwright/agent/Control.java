@@ -19,7 +19,7 @@ import static dev.blockwright.agent.Endpoints.parseEndpoint;
 
 /**
  * The control channel: the agent connects out to the driver, sends trace events, and answers the driver's
- * {@code game.connect} with credentials for the game channel. It carries nothing else.
+ * lifecycle requests: {@code game.connect} and {@code lifecycle.shutdown}.
  */
 final class Control {
     private static volatile GameEndpoint gameEndpoint;
@@ -70,7 +70,13 @@ final class Control {
                 AgentTrace.attach(writer);
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    AgentTrace.send(writer, handle(line).toString());
+                    JsonObject response = handle(line);
+                    AgentTrace.send(writer, response.toString());
+                    // Flush the acknowledgement before the game thread can shut
+                    // down the transport. No user snippet is needed to save/exit.
+                    if (response.has("result") && response.getAsJsonObject("result").has("stopping")) {
+                        new NeoForgeThreads(clientDist).shutdown();
+                    }
                 }
             } catch (IOException error) {
                 AgentTrace.detach();
@@ -90,7 +96,7 @@ final class Control {
         }
     }
 
-    /** Answers one driver request; only {@code game.connect} exists. */
+    /** Answers a lifecycle request; shutdown is scheduled after this reply is sent. */
     static JsonObject handle(String line) {
         JsonElement id = JsonNull.INSTANCE;
         JsonObject response = new JsonObject();
@@ -103,6 +109,8 @@ final class Control {
             response.add("id", id);
             if (method.equals("game.connect") && gameEndpoint != null) {
                 response.add("result", gameEndpoint.issue());
+            } else if (method.equals("lifecycle.shutdown")) {
+                response.add("result", Json.of("stopping", true));
             } else {
                 response.add("error", TaskRuntime.error("unknown-method", "unknown control method: " + method));
             }

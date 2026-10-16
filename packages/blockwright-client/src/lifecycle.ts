@@ -1,10 +1,10 @@
 /**
- * Closes an instance, a driver or anything else with `close()`, ignoring whatever goes wrong. Answers what
- * `close()` answered (for an instance, how the process ended), or undefined when it failed.
+ * Closes an instance, a driver or anything else with `close()`, preferring `closeAsync()` when present,
+ * and ignoring whatever goes wrong. Answers the close result, or undefined when it failed.
  */
-export async function closeQuietly<T>(closable: { close(): T | Promise<T> } | undefined): Promise<T | undefined> {
+export async function closeQuietly<T>(closable: { close(): T | Promise<T>; closeAsync?(): T | Promise<T> } | undefined): Promise<T | undefined> {
   try {
-    return await closable?.close();
+    return closable?.closeAsync ? await closable.closeAsync() : await closable?.close();
   } catch {
     return undefined;
   }

@@ -52,8 +52,8 @@ export interface InstancePair {
   retried: unknown[];
   /**
    * Ordered teardown: the client closes, then the server, then the driver if `launchPair` started
-   * it. Answers how each process ended (the driver's close results; absent when a close failed). Never
-   * throws; a second call answers the first one's result.
+   * it. Answers how each process ended (absent when an instance close failed). Driver shutdown failures
+   * reject after cleanup; a second call answers the same result or failure.
    */
   close(): Promise<PairCloseResult>;
 }
@@ -75,8 +75,10 @@ export async function launchPair(options: LaunchPairOptions = {}): Promise<Insta
   const owned = options.driver === undefined;
   const driver = options.driver ?? new BlockwrightDriver({
     driverPath: options.driverPath,
+    driverArgs: options.driverArgs,
     cwd: options.cwd,
     requestTimeoutMs: options.requestTimeoutMs,
+    closeTimeoutMs: options.closeTimeoutMs,
     game: options.game,
   });
   let pair: { server: BlockwrightInstance; client: BlockwrightInstance };
@@ -91,7 +93,13 @@ export async function launchPair(options: LaunchPairOptions = {}): Promise<Insta
       (attempt) => ({ crashed: crashed.get(attempt) ?? false }),
     ));
   } catch (error) {
-    if (owned) driver.close();
+    if (owned) {
+      try {
+        await driver.closeAsync();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "game launch and driver shutdown both failed", { cause: error });
+      }
+    }
     throw error;
   } finally {
     release();
@@ -106,7 +114,7 @@ export async function launchPair(options: LaunchPairOptions = {}): Promise<Insta
     close() {
       closing ??= (async () => {
         const [client, server] = await closeInOrder([pair.client, pair.server], options.beforeClose);
-        if (owned) driver.close();
+        if (owned) await driver.closeAsync();
         return { ...(server ? { server } : {}), ...(client ? { client } : {}) };
       })();
       return closing;

@@ -13,7 +13,7 @@ jobs:
   live:
     if: inputs.accept_minecraft_eula
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,11 +31,16 @@ jobs:
       - run: rustup show
       - run: npm install --global npm@12.0.2
       - run: npm ci
-      - run: npm run build:release
-      - run: npm run test:live -- live/test-fixtures.spec.ts --workers=1
+      - run: npm run build:native
+      - run: npm run build:agents
+      - run: npm run build:dev
+      - name: Qualify Linux rendering, software EGL, cleanup, coverage and fixtures
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/linux-report.json
+        run: npm run test:live -- coverage.spec.ts lifecycle.spec.ts offscreen.spec.ts test-fixtures.spec.ts --workers=1 --reporter=line,json
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
-          name: game-test-results
-          path: live/test-results/
+          name: linux-game-test-results
+          path: test-results/
           if-no-files-found: ignore

@@ -78,7 +78,7 @@ class DedicatedServerLinkTest {
     private static List<String> serverClasses(Path root) throws IOException {
         try (Stream<Path> files = Files.walk(root.resolve("dev/blockwright"))) {
             return files
-                .map(file -> root.relativize(file).toString())
+                .map(file -> root.relativize(file).toString().replace(File.separatorChar, '/'))
                 .filter(file -> file.endsWith(".class") && !file.contains("/mixin/") && !file.contains("/access/")
                     && !file.endsWith("Test.class"))
                 .map(file -> file.substring(0, file.length() - ".class".length()).replace('/', '.'))

@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use futures_util::{stream, StreamExt, TryStreamExt};
-use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::config::{LoadedBlockwrightConfig, ModSource, ModSpec};
@@ -192,10 +191,13 @@ fn extract_entry(
             .with_context(|| format!("failed to create {}", tmp.display()))?;
         std::io::copy(&mut zip.by_name(&entry)?, &mut out)
             .with_context(|| format!("failed to extract {entry} from {}", archive.filename))?;
+        // Windows cannot publish the containing cache directory while this extracted
+        // file still has a writer handle open, even though moving the file itself worked.
+        drop(out);
         cache.put(&tmp, &filename, None, true)
     })();
     if extracted.is_err() {
-        let _ = fs::remove_file(&tmp);
+        let _ = crate::platform::fs::remove_file(&tmp);
     }
     extracted
 }
@@ -312,10 +314,7 @@ pub async fn sync(configs: &[LoadedBlockwrightConfig]) -> Result<SyncReport> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let tmp = manifest.with_extension(format!("json.{}", Uuid::new_v4()));
-    fs::write(&tmp, serde_json::to_vec_pretty(&mods)?)
-        .with_context(|| format!("failed to write {}", tmp.display()))?;
-    fs::rename(&tmp, &manifest)
+    crate::store::cache::write_replacing(&manifest, serde_json::to_vec_pretty(&mods)?)
         .with_context(|| format!("failed to write {}", manifest.display()))?;
     Ok(SyncReport { manifest, mods })
 }
@@ -527,8 +526,8 @@ missing = {{ from = "outer", entry = "nothing-*.jar" }}
             fs::write(
                 &path,
                 format!(
-                    "[store]\ndir = \"{}\"\n[mods]\ncreate = {{ url = \"https://blockwright.invalid/create-{version}.jar\", sha256 = \"{sha}\" }}\n",
-                    project.store.display()
+                    "[store]\ndir = {}\n[mods]\ncreate = {{ url = \"https://blockwright.invalid/create-{version}.jar\", sha256 = \"{sha}\" }}\n",
+                    toml::Value::String(project.store.to_string_lossy().into_owned())
                 ),
             )
             .unwrap();

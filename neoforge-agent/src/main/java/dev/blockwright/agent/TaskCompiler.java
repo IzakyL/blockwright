@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -475,7 +476,7 @@ final class TaskCompiler {
         }
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
         Map<String, byte[]> classes = new LinkedHashMap<>();
-        try (StandardJavaFileManager standard = compiler.getStandardFileManager(diagnostics, null, StandardCharsets.UTF_8)) {
+        try (StandardJavaFileManager standard = compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8)) {
             JavaFileManager manager = new Capture(new Visibility(new SnippetFileManager(standard, SnippetModules.index()), against), classes);
             List<String> options = new ArrayList<>(List.of("-proc:none", "-nowarn", "-g", "-Xlint:none"));
             String classpath = SnippetClasspath.joined();
@@ -492,7 +493,7 @@ final class TaskCompiler {
                         continue;
                     }
                     String file = diagnostic.getSource() instanceof Source source ? source.path : String.valueOf(diagnostic.getSource());
-                    Problem problem = new Problem(file, diagnostic.getLineNumber(), diagnostic.getColumnNumber(), diagnostic.getMessage(null));
+                    Problem problem = new Problem(file, diagnostic.getLineNumber(), diagnostic.getColumnNumber(), diagnostic.getMessage(Locale.ROOT));
                     problems.add(problem);
                     if (problems.size() <= 20) {
                         message.append("\n  ").append(file).append(':').append(problem.line()).append(':').append(problem.column())

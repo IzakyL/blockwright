@@ -184,7 +184,7 @@ fn build(
     profile: Option<(String, &Table)>,
     table: Table,
 ) -> Result<LoadedBlockwrightConfig> {
-    let config = serde_path_to_error::deserialize(Value::Table(table))
+    let config: BlockwrightConfig = serde_path_to_error::deserialize(Value::Table(table))
         .map_err(|error| {
             let segments: Vec<String> = error.path().iter().map(ToString::to_string).collect();
             let overlay = profile
@@ -196,6 +196,12 @@ fn build(
             Some((name, _)) => format!("failed to parse {}#{name}", path.display()),
             None => format!("failed to parse {}", path.display()),
         })?;
+    config
+        .neoforge
+        .client
+        .display
+        .validate()
+        .with_context(|| format!("invalid client display configuration in {}", path.display()))?;
     Ok(LoadedBlockwrightConfig {
         path,
         root,
@@ -582,6 +588,19 @@ impl Default for ClientDisplayConfig {
     }
 }
 
+impl ClientDisplayConfig {
+    pub fn validate(&self) -> Result<()> {
+        self.validate_for_platform(std::env::consts::OS)
+    }
+
+    fn validate_for_platform(&self, platform: &str) -> Result<()> {
+        if platform == "windows" && !matches!(self.device, RenderDevice::Auto | RenderDevice::Gpu) {
+            bail!("neoforge.client.display.device = {:?} is not supported on Windows; use auto or gpu (the system selects the GPU)", self.device.to_string());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum RenderDevice {
@@ -654,6 +673,34 @@ impl InstanceRole {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_display_rejects_unsupported_devices_before_launching() {
+        for device in [
+            RenderDevice::Software,
+            RenderDevice::Index(0),
+            RenderDevice::Index(9),
+        ] {
+            let display = ClientDisplayConfig {
+                device,
+                ..Default::default()
+            };
+            let error = display
+                .validate_for_platform("windows")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("use auto or gpu"), "{error}");
+            assert!(display.validate_for_platform("linux").is_ok());
+        }
+        for device in [RenderDevice::Auto, RenderDevice::Gpu] {
+            assert!(ClientDisplayConfig {
+                device,
+                ..Default::default()
+            }
+            .validate_for_platform("windows")
+            .is_ok());
+        }
+    }
 
     #[test]
     fn render_device_round_trips_through_its_string_form() {
@@ -1007,7 +1054,27 @@ excludes = ["b.*"]
         for entry in fs::read_dir(&live).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_some_and(|ext| ext == "toml") {
-                load_config(&path).unwrap_or_else(|error| panic!("{}: {error:#}", path.display()));
+                let document: Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                let device = document
+                    .get("neoforge")
+                    .and_then(|value| value.get("client"))
+                    .and_then(|value| value.get("display"))
+                    .and_then(|value| value.get("device"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("auto");
+                if cfg!(windows) && (device == "software" || device.starts_with("index:")) {
+                    let error = format!("{:#}", load_config(&path).unwrap_err());
+                    assert!(
+                        error.contains("not supported on Windows")
+                            && error.contains("use auto or gpu")
+                            && error.contains(device),
+                        "{}: {error}",
+                        path.display()
+                    );
+                } else {
+                    load_config(&path)
+                        .unwrap_or_else(|error| panic!("{}: {error:#}", path.display()));
+                }
                 count += 1;
             }
         }

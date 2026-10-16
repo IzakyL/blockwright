@@ -1,0 +1,52 @@
+name: Windows GPU qualification (candidate)
+on:
+  workflow_dispatch:
+    inputs:
+      accept_minecraft_eula:
+        description: 'I have read and accept https://www.minecraft.net/eula for this test run'
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  windows-live:
+    if: inputs.accept_minecraft_eula
+    runs-on: [self-hosted, Windows, X64, blockwright-gpu, interactive-desktop]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Require an interactive GPU desktop and encoding tools
+        shell: pwsh
+        run: |
+          if (![Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
+            throw 'Run the self-hosted runner in the logged-in desktop session, not as a Windows service.'
+          }
+          Get-Command ffmpeg, ffprobe -ErrorAction Stop
+          java -version
+          javac -version
+          rustup show
+      - run: npm install --global npm@12.0.2
+      - run: npm ci
+      - run: npm run build:native
+      - run: npm run build:agents
+      - run: npm run build:dev
+      - name: Qualify saves, cleanup, rendering, media, coverage and repeated launches
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/windows-report.json
+        run: npm run test:live -- windows-support.spec.ts windows-qualification.spec.ts coverage.spec.ts lifecycle.spec.ts offscreen.spec.ts test-fixtures.spec.ts --workers=1 --reporter=line,json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-candidate-game-results
+          path: test-results/
+          if-no-files-found: ignore

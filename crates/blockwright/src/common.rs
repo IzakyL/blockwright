@@ -7,7 +7,11 @@ use anyhow::{Context, Result};
 use blockwright::engine::blocking;
 
 pub(crate) async fn validate_java_runtime(command: &str, minimum_java: u16) -> Result<()> {
-    if command != "java" && !command.ends_with("/java") {
+    let executable = std::path::Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command);
+    if !executable.eq_ignore_ascii_case("java") && !executable.eq_ignore_ascii_case("java.exe") {
         return Ok(());
     }
 

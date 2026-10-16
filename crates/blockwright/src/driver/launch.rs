@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use blockwright::{
     config::{load_config, InstanceRole},
     engine::{prepare_launch, LaunchOptions, LaunchPlan},
+    platform::process::ProcessTree,
     registry,
     trace::TraceSink,
 };
@@ -35,6 +36,7 @@ pub(crate) struct RunningInstance {
 
     pub(crate) child: Option<Arc<Mutex<Child>>>,
     pub(crate) process_group_id: Option<u32>,
+    pub(crate) process_tree: Option<ProcessTree>,
     pub(crate) exit_watch_task: Option<JoinHandle<()>>,
     pub(crate) control: AgentControlHandle,
     pub(crate) control_task: Option<JoinHandle<()>>,
@@ -45,6 +47,25 @@ pub(crate) struct RunningInstance {
     pub(crate) keep_instance_dir: bool,
     /// When the game was spawned; crash evidence older than this belongs to an earlier run.
     pub(crate) started: std::time::SystemTime,
+}
+
+impl Drop for RunningInstance {
+    fn drop(&mut self) {
+        // JoinHandle's ordinary Drop detaches. Cancellation before registration
+        // and failed closes must also release listeners, pipes and child owners.
+        if let Some(task) = &self.exit_watch_task {
+            task.abort();
+        }
+        if let Some(task) = &self.control_task {
+            task.abort();
+        }
+        if let Some(task) = &self.stdout_task {
+            task.abort();
+        }
+        if let Some(task) = &self.stderr_task {
+            task.abort();
+        }
+    }
 }
 
 pub(crate) async fn launch_neoforge(
@@ -114,8 +135,6 @@ async fn spawn_neoforge_plan(
         sink.write("driver", "lifecycle.warning", json!({ "message": warning }))?;
     }
 
-    let (control, control_task) = AgentControlHandle::spawn(control_listener, sink.clone());
-
     sink.write(
         "process",
         "process.spawn",
@@ -128,9 +147,13 @@ async fn spawn_neoforge_plan(
     )?;
 
     let spawned = spawn_plan_child(&plan, &plan.env, &sink).await?;
+    // The bound listener already accepts TCP handshakes via its backlog. Start
+    // its task only after spawning succeeds, so a failed spawn cannot detach it.
+    let (control, control_task) = AgentControlHandle::spawn(control_listener, sink.clone());
     let SpawnedChild {
         child,
         process_group_id,
+        process_tree,
         started,
         exit_watch_task,
         stdout_task,
@@ -142,6 +165,7 @@ async fn spawn_neoforge_plan(
         sink,
         child: Some(child),
         process_group_id,
+        process_tree: Some(process_tree),
         exit_watch_task: Some(exit_watch_task),
         control,
         control_task: Some(control_task),
@@ -156,6 +180,7 @@ async fn spawn_neoforge_plan(
 pub(crate) struct SpawnedChild {
     pub(crate) child: Arc<Mutex<Child>>,
     pub(crate) process_group_id: Option<u32>,
+    pub(crate) process_tree: ProcessTree,
     pub(crate) started: std::time::SystemTime,
     pub(crate) exit_watch_task: JoinHandle<()>,
     pub(crate) stdout_task: JoinHandle<Result<()>>,
@@ -176,11 +201,8 @@ pub(crate) async fn spawn_plan_child(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    command.process_group(0);
-
     let started = std::time::SystemTime::now();
-    let mut child = command
-        .spawn()
+    let (mut child, process_tree) = ProcessTree::spawn(&mut command)
         .with_context(|| format!("failed to spawn {}", plan.command))?;
     let process_group_id = child.id();
     sink.write(
@@ -212,6 +234,7 @@ pub(crate) async fn spawn_plan_child(
     Ok(SpawnedChild {
         child,
         process_group_id,
+        process_tree,
         started,
         exit_watch_task,
         stdout_task,
@@ -223,27 +246,59 @@ pub(crate) async fn stop_instance_process(
     instance: &mut RunningInstance,
     grace: Duration,
 ) -> Result<Option<Termination>> {
-    instance.control.reset().await;
     if let Some(task) = instance.exit_watch_task.take() {
         task.abort();
         let _ = task.await;
     }
+    #[cfg(windows)]
+    let shutdown_requested = if instance.child.is_some() {
+        timeout(
+            grace.min(Duration::from_secs(3)),
+            instance
+                .control
+                .call(&instance.plan.instance_id, "lifecycle.shutdown", json!({})),
+        )
+        .await
+        .is_ok_and(|result| result.is_ok())
+    } else {
+        false
+    };
+    instance.control.reset().await;
     let ended = match instance.child.take() {
         Some(child) => {
             let mut child = child.lock().await;
-            Some(
+            #[cfg(unix)]
+            let ended =
                 terminate_instance_process(&mut child, instance.process_group_id.take(), grace)
-                    .await?,
+                    .await?;
+            #[cfg(windows)]
+            let ended = terminate_windows_process(
+                &mut child,
+                instance.process_tree.as_ref(),
+                grace,
+                shutdown_requested,
             )
+            .await?;
+            Some(ended)
         }
         None => None,
     };
-    if let Some(task) = instance.stdout_task.take() {
-        drain_output_task(task).await;
+    // Closing the job also reaps any descendants that outlived the JVM.
+    instance.process_tree.take();
+    let mut failures = Vec::new();
+    for task in [instance.stdout_task.take(), instance.stderr_task.take()]
+        .into_iter()
+        .flatten()
+    {
+        if let Err(error) = drain_output_task(task).await {
+            failures.push(format!("{error:#}"));
+        }
     }
-    if let Some(task) = instance.stderr_task.take() {
-        drain_output_task(task).await;
-    }
+    anyhow::ensure!(
+        failures.is_empty(),
+        "process output cleanup failed: {}",
+        failures.join("; ")
+    );
     Ok(ended)
 }
 
@@ -281,6 +336,8 @@ fn register_instance(running: &RunningInstance) {
         trace_path: Some(plan.trace_path.clone()),
         config: Some(running.config_path.clone()),
         started_at: chrono::Utc::now().to_rfc3339(),
+        process_identity: blockwright::process::identity(pid),
+        platform: Some(blockwright::platform::TARGET.to_string()),
     };
     let root = match std::env::current_dir() {
         Ok(root) => root,
@@ -305,22 +362,27 @@ pub(crate) async fn close_instance(
             .remove(&params.instance_id)
             .with_context(|| format!("unknown instance: {}", params.instance_id))?
     };
-    if let Ok(root) = std::env::current_dir() {
-        registry::remove(&root, &params.instance_id);
-    }
 
-    instance
+    // Evidence failures cannot bypass the game's normal world-save path.
+    let close_trace_error = instance
         .sink
-        .write("driver", "lifecycle.close", json!({}))?;
+        .write("driver", "lifecycle.close", json!({}))
+        .err();
 
     let grace = params
         .grace_ms
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_CLOSE_GRACE);
-    let ended = stop_instance_process(&mut instance, grace).await?;
-    if let Some(task) = instance.control_task {
+    let stopped = stop_instance_process(&mut instance, grace).await;
+    if stopped.is_ok() || instance.process_tree.is_none() {
+        if let Ok(root) = std::env::current_dir() {
+            registry::remove(&root, &params.instance_id);
+        }
+    }
+    if let Some(task) = instance.control_task.take() {
         task.abort();
     }
+    let ended = stopped?;
 
     let plan = &instance.plan;
     // A game can crash and hang instead of exiting; whatever it left behind is reported here too.
@@ -330,11 +392,17 @@ pub(crate) async fn close_instance(
     exit.as_object_mut()
         .expect("an object")
         .extend(crash.clone());
-    instance.sink.write("process", "process.exit", exit)?;
+    let exit_trace_error = instance.sink.write("process", "process.exit", exit).err();
+    if let Some(error) = close_trace_error.or(exit_trace_error) {
+        return Err(error).context("game stopped but lifecycle trace could not be saved");
+    }
 
     let sink = &instance.sink;
     // A crash report or JVM crash log found now keeps the dir too, so the files it names still exist.
-    let keep = instance.keep_instance_dir || params.keep_projection || !crash.is_empty();
+    let keep = instance.keep_instance_dir
+        || params.keep_projection
+        || !crash.is_empty()
+        || !outcome.success;
     if !keep && !failed(&plan.instance_dir) {
         reclaim_dir(sink, &plan.instance_dir)?;
     }
@@ -349,9 +417,9 @@ pub(crate) async fn close_instance(
     })
 }
 
-/// How long a close waits after SIGTERM (the JVM runs its shutdown hooks: a server saves the world)
-/// before it SIGKILLs the process group.
-pub(crate) const DEFAULT_CLOSE_GRACE: Duration = Duration::from_secs(10);
+/// How long a close allows normal game shutdown and world saving to finish.
+/// The driver also bounds signal/EOF teardown with its separate total budget.
+pub(crate) const DEFAULT_CLOSE_GRACE: Duration = Duration::from_secs(30);
 /// How long a close waits for the process after SIGKILL.
 const KILL_WAIT: Duration = Duration::from_secs(10);
 
@@ -392,11 +460,7 @@ pub(crate) fn close_outcome(ended: Option<&Termination>, no_crash: bool) -> Clos
     let success = if !ended.terminated {
         ended.status.success()
     } else {
-        !ended.killed
-            && no_crash
-            && (ended.status.success()
-                || code == Some(128 + libc::SIGTERM)
-                || signal == Some(libc::SIGTERM))
+        !ended.killed && no_crash && graceful_status(&ended.status)
     };
     CloseOutcome {
         code,
@@ -404,6 +468,19 @@ pub(crate) fn close_outcome(ended: Option<&Termination>, no_crash: bool) -> Clos
         success,
         terminated: ended.terminated,
         killed: ended.killed,
+    }
+}
+
+fn graceful_status(status: &ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        status.success()
+            || status.code() == Some(128 + libc::SIGTERM)
+            || exit_signal(status) == Some(libc::SIGTERM)
+    }
+    #[cfg(windows)]
+    {
+        status.success()
     }
 }
 
@@ -421,17 +498,20 @@ fn reclaim_dir(sink: &TraceSink, path: &Path) -> Result<()> {
     if !path.is_dir() {
         return Ok(());
     }
-    match std::fs::remove_dir_all(path) {
+    match blockwright::platform::remove_owned_dir_all(path) {
         Ok(()) => sink.write("driver", "lifecycle.reclaim", json!({ "path": path })),
-        Err(error) => sink.write(
-            "driver",
-            "lifecycle.reclaim.error",
-            json!({ "path": path, "error": error.to_string() }),
-        ),
+        Err(error) => {
+            sink.write(
+                "driver",
+                "lifecycle.reclaim.error",
+                json!({ "path": path, "error": error.to_string() }),
+            )?;
+            Err(error).with_context(|| format!("failed to reclaim {}", path.display()))
+        }
     }
 }
 
-pub(crate) async fn shutdown_all(instances: SharedInstances) {
+pub(crate) async fn shutdown_all(instances: SharedInstances) -> Result<()> {
     let ids = {
         let instances = instances.lock().await;
         instances.keys().cloned().collect::<Vec<_>>()
@@ -448,7 +528,24 @@ pub(crate) async fn shutdown_all(instances: SharedInstances) {
             instances.clone(),
         ));
     }
-    closing.join_all().await;
+    let mut failures = Vec::new();
+    while let Some(result) = closing.join_next().await {
+        match result {
+            Ok(Ok(result)) if result.success => {}
+            Ok(Ok(result)) => failures.push(format!(
+                "instance cleanup was unsuccessful: code={:?}, killed={}",
+                result.code, result.killed
+            )),
+            Ok(Err(error)) => failures.push(format!("{error:#}")),
+            Err(error) => failures.push(error.to_string()),
+        }
+    }
+    anyhow::ensure!(
+        failures.is_empty(),
+        "instance cleanup failed: {}",
+        failures.join("; ")
+    );
+    Ok(())
 }
 
 async fn watch_for_unexpected_exit(
@@ -559,13 +656,22 @@ fn jvm_crash_summary(path: &Path) -> Vec<String> {
 }
 
 fn exit_signal(status: &ExitStatus) -> Option<i32> {
-    use std::os::unix::process::ExitStatusExt;
-    status.signal()
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    }
+    #[cfg(windows)]
+    {
+        let _ = status;
+        None
+    }
 }
 
 /// Stops the game: a process that already exited keeps its own status; otherwise its process group
 /// gets SIGTERM and `grace` to exit (shutdown hooks run), then SIGKILL. Without a process group the
 /// child alone is SIGKILLed at once.
+#[cfg(unix)]
 pub(crate) async fn terminate_instance_process(
     child: &mut Child,
     process_group_id: Option<u32>,
@@ -604,20 +710,57 @@ pub(crate) async fn terminate_instance_process(
     })
 }
 
+#[cfg(unix)]
 fn signal_process_group(process_group_id: Option<u32>, signal: i32) {
     if let Some(pid) = process_group_id {
         blockwright::process::signal(pid, signal);
     }
 }
 
-pub(crate) async fn drain_output_task(mut task: JoinHandle<Result<()>>) {
-    match timeout(Duration::from_secs(5), &mut task).await {
-        Ok(result) => {
-            let _ = result;
+#[cfg(windows)]
+async fn terminate_windows_process(
+    child: &mut Child,
+    tree: Option<&ProcessTree>,
+    grace: Duration,
+    shutdown_requested: bool,
+) -> Result<Termination> {
+    if let Some(status) = child.try_wait().context("failed to poll child process")? {
+        return Ok(Termination {
+            status,
+            terminated: shutdown_requested,
+            killed: false,
+        });
+    }
+    if shutdown_requested {
+        if let Ok(status) = timeout(grace, child.wait()).await {
+            return Ok(Termination {
+                status: status.context("failed waiting for normal process exit")?,
+                terminated: true,
+                killed: false,
+            });
         }
+    }
+    if let Some(tree) = tree {
+        tree.kill()?;
+    }
+    let _ = child.start_kill();
+    let status = timeout(KILL_WAIT, child.wait())
+        .await
+        .context("timed out waiting for forced process exit")??;
+    Ok(Termination {
+        status,
+        terminated: true,
+        killed: true,
+    })
+}
+
+pub(crate) async fn drain_output_task(mut task: JoinHandle<Result<()>>) -> Result<()> {
+    match timeout(Duration::from_secs(5), &mut task).await {
+        Ok(result) => result.context("process output task failed")?,
         Err(_) => {
             task.abort();
             let _ = task.await;
+            anyhow::bail!("timed out draining process output");
         }
     }
 }
@@ -626,8 +769,17 @@ pub(crate) async fn pipe_output<R>(reader: R, stderr: bool, sink: TraceSink) -> 
 where
     R: AsyncRead + Unpin,
 {
-    let mut lines = BufReader::new(reader).lines();
-    while let Some(line) = lines.next_line().await? {
+    let mut reader = BufReader::new(reader);
+    let mut bytes = Vec::new();
+    while reader.read_until(b'\n', &mut bytes).await? != 0 {
+        if bytes.last() == Some(&b'\n') {
+            bytes.pop();
+        }
+        if bytes.last() == Some(&b'\r') {
+            bytes.pop();
+        }
+        let line = String::from_utf8_lossy(&bytes);
+        let lossy = matches!(line, std::borrow::Cow::Owned(_));
         sink.write(
             "process",
             if stderr {
@@ -635,8 +787,9 @@ where
             } else {
                 "process.stdout"
             },
-            json!({ "line": line }),
+            json!({ "line": line, "lossyUtf8": lossy }),
         )?;
+        bytes.clear();
     }
 
     Ok(())
@@ -656,7 +809,7 @@ pub(crate) fn test_instance(role: InstanceRole) -> RunningInstance {
 
 #[cfg(test)]
 pub(crate) fn test_instance_with(plan: LaunchPlan) -> RunningInstance {
-    let sink = TraceSink::create("/dev/null", "test").unwrap();
+    let sink = TraceSink::create(if cfg!(windows) { "NUL" } else { "/dev/null" }, "test").unwrap();
     let control = AgentControlHandle::over(super::control::ControlMux::closed(
         "this test instance has no agent",
     ));
@@ -665,6 +818,7 @@ pub(crate) fn test_instance_with(plan: LaunchPlan) -> RunningInstance {
         sink,
         child: None,
         process_group_id: None,
+        process_tree: None,
         exit_watch_task: None,
         control,
         control_task: None,
@@ -708,6 +862,123 @@ pub(crate) fn test_plan(instance_id: &str, instance_dir: PathBuf, args: Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_spawn_releases_its_control_listener() {
+        let root = std::env::temp_dir().join(format!("bw-failed-spawn-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut plan = test_plan("failed-spawn", root.clone(), vec![]);
+        plan.command = root
+            .join("nonexistent-executable")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            spawn_neoforge_plan(Arc::new(plan), listener, root.join("config.toml"))
+                .await
+                .is_err()
+        );
+        let rebound = TcpListener::bind(address)
+            .await
+            .expect("failed launch leaked its listener");
+        drop(rebound);
+        blockwright::platform::remove_owned_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn dropping_an_unregistered_instance_aborts_its_background_tasks() {
+        let mut instance = test_instance(InstanceRole::Server);
+        let control = tokio::spawn(std::future::pending::<()>());
+        let watcher = tokio::spawn(std::future::pending::<()>());
+        let stdout = tokio::spawn(std::future::pending::<Result<()>>());
+        let handles = [
+            control.abort_handle(),
+            watcher.abort_handle(),
+            stdout.abort_handle(),
+        ];
+        instance.control_task = Some(control);
+        instance.exit_watch_task = Some(watcher);
+        instance.stdout_task = Some(stdout);
+        drop(instance);
+        timeout(Duration::from_secs(2), async {
+            while handles.iter().any(|handle| !handle.is_finished()) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("instance drop detached an owned task");
+    }
+
+    #[tokio::test]
+    async fn close_reports_a_failed_output_task() {
+        let instances: SharedInstances = Default::default();
+        let mut instance = test_instance(InstanceRole::Server);
+        instance.stdout_task = Some(tokio::spawn(async { anyhow::bail!("output read failed") }));
+        instances.lock().await.insert("test".into(), instance);
+        let error = close_instance(
+            InstanceCloseParams {
+                instance_id: "test".into(),
+                keep_projection: true,
+                grace_ms: None,
+            },
+            instances,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("output read failed"));
+    }
+
+    #[tokio::test]
+    async fn non_utf8_output_does_not_discard_subsequent_lines() {
+        use tokio::io::AsyncWriteExt;
+        let root = std::env::temp_dir().join(format!("bw-output-encoding-{}", std::process::id()));
+        let path = root.join("trace.ndjson");
+        let sink = TraceSink::create(&path, "output").unwrap();
+        let (mut write, read) = tokio::io::duplex(256);
+        write.write_all(b"\xff\xfe\r\nnext-line\n").await.unwrap();
+        drop(write);
+        pipe_output(read, false, sink.clone()).await.unwrap();
+        let events: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["data"]["lossyUtf8"], true);
+        assert_eq!(events[1]["data"]["line"], "next-line");
+        drop(sink);
+        blockwright::platform::remove_owned_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_trace_write_failure_still_allows_normal_game_shutdown() {
+        let (child, pgid) = spawn_group("trap 'exit 143' TERM; while :; do sleep 0.05; done");
+        sleep(Duration::from_millis(100)).await;
+        let mut instance = test_instance(InstanceRole::Server);
+        instance.sink = TraceSink::create("/dev/full", "trace-failure").unwrap();
+        instance.child = Some(Arc::new(Mutex::new(child)));
+        instance.process_group_id = pgid;
+        let owner = instance.child.clone().unwrap();
+        let instances: SharedInstances = Default::default();
+        instances.lock().await.insert("test".into(), instance);
+        let error = close_instance(
+            InstanceCloseParams {
+                instance_id: "test".into(),
+                keep_projection: true,
+                grace_ms: Some(5_000),
+            },
+            instances,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("lifecycle trace"));
+        assert_eq!(
+            owner.lock().await.try_wait().unwrap().unwrap().code(),
+            Some(143)
+        );
+    }
 
     #[test]
     fn a_dead_game_names_its_crash_report_and_jvm_log_with_their_key_lines() {
@@ -783,8 +1054,8 @@ mod tests {
             guard.insert("client".to_string(), test_instance(InstanceRole::Client));
         }
 
-        shutdown_all(instances.clone()).await;
-        shutdown_all(instances.clone()).await;
+        shutdown_all(instances.clone()).await.unwrap();
+        shutdown_all(instances.clone()).await.unwrap();
 
         assert!(instances.lock().await.is_empty());
     }
@@ -813,7 +1084,7 @@ mod tests {
                 guard.insert(name.to_string(), test_instance_with(plan));
             }
 
-            shutdown_all(instances).await;
+            shutdown_all(instances).await.unwrap();
 
             assert_eq!(instance_dir.exists(), crashed, "{name}");
         }
@@ -862,6 +1133,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(unix)]
     fn spawn_group(script: &str) -> (Child, Option<u32>) {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", script]).process_group(0);
@@ -870,6 +1142,7 @@ mod tests {
         (child, pid)
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_process_that_already_exited_keeps_its_own_status() {
         let (mut child, pgid) = spawn_group("exit 3");
@@ -894,10 +1167,12 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn sigterm_comes_first_and_a_process_that_heeds_it_is_a_clean_stop() {
         // Exits the way a JVM does on SIGTERM: shutdown hooks run, then status 128+15.
-        let (mut child, pgid) = spawn_group("trap 'sleep 0.2; exit 143' TERM; while :; do sleep 0.05; done");
+        let (mut child, pgid) =
+            spawn_group("trap 'sleep 0.2; exit 143' TERM; while :; do sleep 0.05; done");
         sleep(Duration::from_millis(200)).await;
         let started = std::time::Instant::now();
 
@@ -905,7 +1180,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
         assert!(ended.terminated && !ended.killed);
         assert_eq!(
             close_outcome(Some(&ended), true),
@@ -923,6 +1202,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_process_killed_by_the_sigterm_itself_reports_the_signal() {
         let (mut child, pgid) = spawn_group("exec sleep 30");
@@ -938,6 +1218,7 @@ mod tests {
         assert!(outcome.success && outcome.terminated && !outcome.killed);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_process_that_ignores_sigterm_is_killed_after_the_grace_period() {
         let (mut child, pgid) = spawn_group("trap '' TERM; while :; do sleep 0.05; done");
@@ -956,6 +1237,7 @@ mod tests {
         assert!(outcome.terminated && outcome.killed && !outcome.success);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn without_a_process_group_the_child_is_killed_at_once() {
         let (mut child, _) = spawn_group("trap '' TERM; while :; do sleep 0.05; done");
@@ -964,6 +1246,61 @@ mod tests {
             .unwrap();
         assert!(ended.killed);
         assert_eq!(exit_signal(&ended.status), Some(libc::SIGKILL));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "auxiliary process, invoked by termination tests"]
+    fn process_helper() {
+        let delay: u64 = std::env::var("BLOCKWRIGHT_TEST_EXIT_DELAY")
+            .unwrap()
+            .parse()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(delay));
+    }
+
+    #[cfg(windows)]
+    fn spawn_windows_helper(delay_ms: u64) -> (Child, ProcessTree) {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "driver::launch::tests::process_helper",
+                "--ignored",
+            ])
+            .env("BLOCKWRIGHT_TEST_EXIT_DELAY", delay_ms.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        ProcessTree::spawn(&mut command).unwrap()
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_normal_exit_is_awaited_without_forcing() {
+        let (mut child, tree) = spawn_windows_helper(150);
+        let ended =
+            terminate_windows_process(&mut child, Some(&tree), Duration::from_secs(5), true)
+                .await
+                .unwrap();
+        assert!(ended.terminated && !ended.killed);
+        assert!(close_outcome(Some(&ended), true).success);
+        assert_eq!(close_outcome(Some(&ended), true).signal, None);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_unresponsive_game_is_forced_and_never_reports_success() {
+        let (mut child, tree) = spawn_windows_helper(60_000);
+        let before = std::time::Instant::now();
+        let ended =
+            terminate_windows_process(&mut child, Some(&tree), Duration::from_millis(50), true)
+                .await
+                .unwrap();
+        assert!(before.elapsed() >= Duration::from_millis(50));
+        let outcome = close_outcome(Some(&ended), true);
+        assert!(outcome.terminated && outcome.killed && !outcome.success);
+        assert_eq!(outcome.signal, None);
     }
 
     #[test]

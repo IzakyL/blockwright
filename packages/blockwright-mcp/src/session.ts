@@ -89,6 +89,9 @@ export class BlockwrightSession {
   readonly ui: UiHost<MinecraftClient, ui.Probe>;
 
   private game?: Game;
+  /** Own a launch through teardown even when the MCP host closes stdio during startup. */
+  private lifecycle: Promise<unknown> = Promise.resolve();
+  private closing?: Promise<PairCloseResult | undefined>;
   private observation?: evidence.Observation;
   private launched?: { config?: string; startedAt: string; retried: string[] };
   private shotCounter = 0;
@@ -147,10 +150,17 @@ export class BlockwrightSession {
     return listInstances(this.cwd);
   }
 
-  async launch(request: LaunchRequest = {}): Promise<SessionStatus> {
+  launch(request: LaunchRequest = {}): Promise<SessionStatus> {
+    this.closing = undefined;
+    const launched = this.lifecycle.then(() => this.launchNow(request));
+    this.lifecycle = launched.catch(() => {});
+    return launched;
+  }
+
+  private async launchNow(request: LaunchRequest): Promise<SessionStatus> {
     if (this.game) {
       if (!request.restart) throw new SessionAlreadyRunningError([this.game.server.instanceId, this.game.client.instanceId]);
-      await this.close();
+      await this.closeNow();
     }
     const prefix = this.instancePrefix;
     const config = request.config ?? this.options.config;
@@ -175,7 +185,16 @@ export class BlockwrightSession {
     this.game = game;
     this.ui.reset();
     this.observation = undefined;
-    await this.ui.verify(game.client);
+    try {
+      await this.ui.verify(game.client);
+    } catch (error) {
+      try {
+        await this.closeNow();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "UI setup and game cleanup both failed", { cause: error });
+      }
+      throw error;
+    }
     this.launched = { config, startedAt: new Date().toISOString(), retried: game.instances.retried.map(errorSummary) };
     this.record({ kind: "launch", config });
     return this.status();
@@ -295,7 +314,15 @@ export class BlockwrightSession {
   }
 
   /** Ends the long captures still running (without results), then closes the game (server stopped gracefully). */
-  async close(): Promise<PairCloseResult | undefined> {
+  close(): Promise<PairCloseResult | undefined> {
+    if (this.closing) return this.closing;
+    const closing = this.lifecycle.then(() => this.closeNow());
+    this.lifecycle = closing.catch(() => {});
+    this.closing = closing;
+    return closing;
+  }
+
+  private async closeNow(): Promise<PairCloseResult | undefined> {
     const game = this.game;
     const recording = this.recording;
     this.recording = undefined;

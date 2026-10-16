@@ -16,7 +16,7 @@ public class RenderSystemMixin {
         at = @At(value = "INVOKE", target = "Lorg/lwjgl/glfw/GLFW;glfwSwapBuffers(J)V")
     )
     private static void blockwright$swapBuffers(long window) {
-        if (ClientOffscreen.enabled()) {
+        if (ClientOffscreen.usesEgl()) {
             return;
         }
         GLFW.glfwSwapBuffers(window);

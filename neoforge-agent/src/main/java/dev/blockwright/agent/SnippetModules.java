@@ -8,6 +8,7 @@ import java.lang.module.ResolvedModule;
 import java.net.URI;
 import java.net.URL;
 import java.nio.file.FileSystems;
+import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -85,7 +86,7 @@ final class SnippetModules {
         }
     }
 
-    private static final class Owner {
+    private static final class Owner implements AutoCloseable {
         private final String moduleName;
         private final ClassLoader loader;
         private final ModuleReference reference;
@@ -94,6 +95,8 @@ final class SnippetModules {
         private volatile boolean rootResolved;
         private volatile ModuleReader reader;
         private volatile String rootFailure;
+        /** Only the ZIP filesystem opened here is ours; game/union filesystems and loaders are borrowed. */
+        private FileSystem ownedFileSystem;
 
         Owner(String moduleName, ClassLoader loader, ModuleReference reference) {
             this.moduleName = moduleName;
@@ -206,10 +209,8 @@ final class SnippetModules {
                         } else if (Files.isDirectory(path)) {
                             root = path;
                         } else if (Files.isRegularFile(path)) {
-                            root = FileSystems.newFileSystem(path, Map.of())
-                                .getRootDirectories()
-                                .iterator()
-                                .next();
+                            ownedFileSystem = FileSystems.newFileSystem(path, Map.of());
+                            root = ownedFileSystem.getRootDirectories().iterator().next();
                         } else {
                             rootFailure = "location " + path + " is neither a directory nor a file";
                         }
@@ -226,9 +227,35 @@ final class SnippetModules {
             root();
             return rootFailure;
         }
+
+        @Override
+        public synchronized void close() throws IOException {
+            IOException failure = null;
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (IOException error) {
+                    failure = error;
+                } finally {
+                    reader = null;
+                }
+            }
+            if (ownedFileSystem != null) {
+                try {
+                    ownedFileSystem.close();
+                } catch (IOException error) {
+                    if (failure == null) failure = error;
+                    else failure.addSuppressed(error);
+                } finally {
+                    ownedFileSystem = null;
+                    root = null;
+                }
+            }
+            if (failure != null) throw failure;
+        }
     }
 
-    static final class Index {
+    static final class Index implements AutoCloseable {
         private final Map<String, List<Owner>> owners;
         private final Map<String, List<Entry>> fixed;
         private final Map<String, List<Entry>> resolvedClasses = new ConcurrentHashMap<>();
@@ -358,6 +385,24 @@ final class SnippetModules {
             }
             return builder.toString();
         }
+
+        /** Releases only readers/filesystems opened by this index, never a borrowed game classloader. */
+        @Override
+        public void close() throws IOException {
+            Set<Owner> unique = new LinkedHashSet<>();
+            owners.values().forEach(unique::addAll);
+            IOException failure = null;
+            for (Owner owner : unique) {
+                try {
+                    owner.close();
+                } catch (IOException error) {
+                    if (failure == null) failure = error;
+                    else failure.addSuppressed(error);
+                }
+            }
+            resolvedClasses.clear();
+            if (failure != null) throw failure;
+        }
     }
 
     static Index index() {
@@ -401,6 +446,13 @@ final class SnippetModules {
 
     static void reset() {
         synchronized (SnippetModules.class) {
+            if (resolved != null) {
+                try {
+                    resolved.close();
+                } catch (IOException failure) {
+                    throw new IllegalStateException("could not close the snippet module index", failure);
+                }
+            }
             resolved = null;
             linkLoader = null;
             installed = false;

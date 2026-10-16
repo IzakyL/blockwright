@@ -33,6 +33,9 @@ final class ClientExit {
 
     /** Installs the hook once; called on the render thread when the offscreen context is made current. */
     static void install() {
+        if (!ClientOffscreen.usesEgl()) {
+            return;
+        }
         if (!INSTALLED.compareAndSet(false, true)) {
             return;
         }

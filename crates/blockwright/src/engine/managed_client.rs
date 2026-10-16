@@ -35,15 +35,18 @@ pub(crate) async fn ensure_client_libraries(game_dir: &Path, version_id: &str) -
             if !rules_allow(library.get("rules")) {
                 continue;
             }
-            let Some((path, url)) = library_artifact(library) else {
-                continue;
-            };
-            let dest = libraries_dir.join(&path);
-            if dest.exists() || !seen.insert(dest.clone()) {
-                continue;
+            for artifact in library_artifacts(library) {
+                let dest = libraries_dir.join(&artifact.path);
+                if dest.exists() || !seen.insert(dest.clone()) {
+                    continue;
+                }
+                let label = format!("client library {}", dest.display());
+                pending.push(Download {
+                    url: artifact.url,
+                    dest,
+                    label,
+                });
             }
-            let label = format!("client library {}", dest.display());
-            pending.push(Download { url, dest, label });
         }
     }
 
@@ -203,14 +206,13 @@ pub(crate) fn build_client_launch_metadata(
             if !rules_allow(library.get("rules")) {
                 continue;
             }
-            let Some((path, _url)) = library_artifact(library) else {
-                continue;
-            };
-            let jar = libraries_dir.join(&path);
-            if is_native_library(library) {
-                extract_native_jar(&jar, &natives_dir)?;
-            } else if jar.exists() {
-                push_unique_path(&mut classpath, &mut classpath_seen, jar);
+            for artifact in library_artifacts(library) {
+                let jar = libraries_dir.join(&artifact.path);
+                if artifact.native {
+                    extract_native_jar(&jar, &natives_dir)?;
+                } else if jar.exists() {
+                    push_unique_path(&mut classpath, &mut classpath_seen, jar);
+                }
             }
         }
     }
@@ -358,7 +360,10 @@ fn replace_launcher_placeholders(arg: &str, replacements: &LauncherReplacements<
         )
         .replace("${launcher_name}", "blockwright")
         .replace("${launcher_version}", env!("CARGO_PKG_VERSION"))
-        .replace("${classpath_separator}", ":")
+        .replace(
+            "${classpath_separator}",
+            if cfg!(windows) { ";" } else { ":" },
+        )
         .replace("${classpath}", replacements.classpath)
 }
 
@@ -385,21 +390,90 @@ fn rules_allow(rules: Option<&Value>) -> bool {
 }
 
 fn launcher_os_matches(os: &Value) -> bool {
+    launcher_os_matches_platform(os, launcher_os_name(), "x86_64", &launcher_os_version())
+}
+
+fn launcher_os_name() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else {
+        "linux"
+    }
+}
+
+fn launcher_os_matches_platform(
+    os: &Value,
+    platform: &str,
+    architecture: &str,
+    version: &str,
+) -> bool {
     let Some(object) = os.as_object() else {
         return true;
     };
     if let Some(name) = object.get("name").and_then(Value::as_str) {
-        if name != "linux" {
+        if name != platform {
             return false;
         }
     }
 
     if let Some(arch) = object.get("arch").and_then(Value::as_str) {
-        if arch != "x86_64" {
+        if arch != architecture && !(architecture == "x86_64" && arch == "amd64") {
+            return false;
+        }
+    }
+    if let Some(pattern) = object.get("version").and_then(Value::as_str) {
+        if version.is_empty()
+            || !regex::Regex::new(pattern).is_ok_and(|regex| regex.is_match(version))
+        {
             return false;
         }
     }
     true
+}
+
+fn launcher_os_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        #[cfg(windows)]
+        {
+            // RtlGetVersion reports the actual NT version even without an application
+            // compatibility manifest (Windows 11 also reports major/minor 10.0).
+            #[repr(C)]
+            struct Version {
+                size: u32,
+                major: u32,
+                minor: u32,
+                build: u32,
+                platform: u32,
+                service_pack: [u16; 128],
+            }
+            #[link(name = "ntdll")]
+            unsafe extern "system" {
+                fn RtlGetVersion(version: *mut Version) -> i32;
+            }
+            let mut value = Version {
+                size: std::mem::size_of::<Version>() as u32,
+                major: 0,
+                minor: 0,
+                build: 0,
+                platform: 0,
+                service_pack: [0; 128],
+            };
+            if unsafe { RtlGetVersion(&mut value) } >= 0 {
+                return format!("{}.{}.{}", value.major, value.minor, value.build);
+            }
+        }
+        #[cfg(unix)]
+        {
+            let mut value: libc::utsname = unsafe { std::mem::zeroed() };
+            if unsafe { libc::uname(&mut value) } == 0 {
+                return unsafe { std::ffi::CStr::from_ptr(value.release.as_ptr()) }
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        }
+        String::new()
+    })
 }
 
 fn launcher_features_match(features: &Value) -> bool {
@@ -418,11 +492,72 @@ fn library_artifact(library: &Value) -> Option<(String, String)> {
     Some((path.to_string(), url.to_string()))
 }
 
+struct LibraryArtifact {
+    path: String,
+    url: String,
+    native: bool,
+}
+
+fn library_artifacts(library: &Value) -> Vec<LibraryArtifact> {
+    let native_classifier = library
+        .get("name")
+        .and_then(Value::as_str)
+        .and_then(|name| name.split(':').nth(3))
+        .filter(|name| name.starts_with("natives-"));
+    if native_classifier.is_some() && !is_native_library(library) {
+        return Vec::new();
+    }
+    let mut artifacts = Vec::new();
+    if let Some((path, url)) = library_artifact(library) {
+        artifacts.push(LibraryArtifact {
+            path,
+            url,
+            native: native_classifier.is_some(),
+        });
+    }
+    // Older metadata stores the selected native beside the Java artifact instead of
+    // declaring a separate Maven library. Only the current OS/x64 classifier is used.
+    if let Some(classifier) = library
+        .get("natives")
+        .and_then(|natives| natives.get(launcher_os_name()))
+        .and_then(Value::as_str)
+    {
+        let classifier = classifier.replace("${arch}", "64");
+        let current = format!("natives-{}", launcher_os_name());
+        if classifier != current && classifier != format!("{current}-64") {
+            return artifacts;
+        }
+        if let Some(artifact) = library
+            .get("downloads")
+            .and_then(|downloads| downloads.get("classifiers"))
+            .and_then(|classifiers| classifiers.get(&classifier))
+        {
+            if let (Some(path), Some(url)) = (
+                artifact.get("path").and_then(Value::as_str),
+                artifact.get("url").and_then(Value::as_str),
+            ) {
+                artifacts.push(LibraryArtifact {
+                    path: path.to_string(),
+                    url: url.to_string(),
+                    native: true,
+                });
+            }
+        }
+    }
+    artifacts
+}
+
 fn is_native_library(library: &Value) -> bool {
     library
         .get("name")
         .and_then(Value::as_str)
-        .is_some_and(|name| name.ends_with(":natives-linux"))
+        .is_some_and(|name| {
+            name.ends_with(if cfg!(windows) {
+                ":natives-windows"
+            } else {
+                ":natives-linux"
+            })
+        })
 }
 
 fn extract_native_jar(jar: &Path, natives_dir: &Path) -> Result<()> {
@@ -450,14 +585,22 @@ fn extract_native_jar(jar: &Path, natives_dir: &Path) -> Result<()> {
         let Some(filename) = name.file_name() else {
             continue;
         };
+        #[cfg(windows)]
+        if !Path::new(filename)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("dll"))
+        {
+            continue;
+        }
         let dest = natives_dir.join(filename);
         if dest.exists() {
             continue;
         }
-        let mut out = fs::File::create(&dest)
-            .with_context(|| format!("failed to create {}", dest.display()))?;
-        io::copy(&mut entry, &mut out)
+        let mut bytes = Vec::new();
+        io::Read::read_to_end(&mut entry, &mut bytes)
             .with_context(|| format!("failed to extract native {}", dest.display()))?;
+        crate::store::cache::write_replacing(&dest, bytes)
+            .with_context(|| format!("failed to publish native {}", dest.display()))?;
     }
     Ok(())
 }
@@ -529,12 +672,12 @@ mod tests {
     }
 
     #[test]
-    fn only_the_linux_x86_64_natives_classifier_is_extracted() {
+    fn only_the_current_x86_64_natives_classifier_is_extracted() {
         let native = |name: &str| json!({ "name": name });
-        assert!(is_native_library(&native(
-            "org.lwjgl:lwjgl:3.3.3:natives-linux"
-        )));
+        let selected = format!("org.lwjgl:lwjgl:3.3.3:natives-{}", launcher_os_name());
+        assert!(is_native_library(&native(&selected)));
         for rejected in [
+            "org.lwjgl:lwjgl:3.3.3:natives-linux",
             "org.lwjgl:lwjgl:3.3.3:natives-linux-arm64",
             "org.lwjgl:lwjgl:3.3.3:natives-macos",
             "org.lwjgl:lwjgl:3.3.3:natives-macos-arm64",
@@ -543,6 +686,9 @@ mod tests {
             "org.lwjgl:lwjgl:3.3.3:natives-windows-arm64",
             "org.lwjgl:lwjgl:3.3.3:natives-windows-x86",
         ] {
+            if rejected == selected {
+                continue;
+            }
             assert!(
                 !is_native_library(&native(rejected)),
                 "{rejected} should not be extracted"
@@ -553,16 +699,71 @@ mod tests {
     }
 
     #[test]
-    fn os_rules_admit_only_linux() {
+    fn os_rules_admit_only_the_current_platform() {
         let allow = |os: Value| rules_allow(Some(&json!([{ "action": "allow", "os": os }])));
-        assert!(allow(json!({ "name": "linux" })));
+        assert!(allow(json!({ "name": launcher_os_name() })));
         assert!(!allow(json!({ "name": "osx" })));
-        assert!(!allow(json!({ "name": "windows" })));
+        assert_eq!(allow(json!({ "name": "windows" })), cfg!(windows));
+        assert_eq!(allow(json!({ "name": "linux" })), cfg!(unix));
 
-        assert!(!allow(json!({ "name": "linux", "arch": "x86" })));
-        assert!(allow(json!({ "name": "linux", "arch": "x86_64" })));
+        assert!(!allow(json!({ "name": launcher_os_name(), "arch": "x86" })));
+        assert!(allow(
+            json!({ "name": launcher_os_name(), "arch": "x86_64" })
+        ));
 
         assert!(rules_allow(None));
+    }
+
+    #[test]
+    fn windows_os_rules_match_architecture_and_version_regex() {
+        let matches =
+            |os: Value| launcher_os_matches_platform(&os, "windows", "x86_64", "10.0.26100");
+        assert!(matches(
+            json!({"name": "windows", "version": "^10\\.", "arch": "amd64"})
+        ));
+        assert!(!matches(json!({"name": "windows", "version": "^6\\."})));
+        assert!(!matches(json!({"name": "windows", "version": "["})));
+        assert!(!matches(json!({"name": "windows", "arch": "arm64"})));
+        assert!(!matches(json!({"name": "linux"})));
+        assert!(!launcher_os_version().is_empty());
+    }
+
+    #[test]
+    fn classpath_separator_placeholder_matches_the_platform() {
+        let account = ClientAccountConfig::default();
+        assert_eq!(
+            replace_launcher_placeholders("${classpath_separator}", &replacements_for(&account)),
+            if cfg!(windows) { ";" } else { ":" }
+        );
+    }
+
+    #[test]
+    fn legacy_native_download_selects_only_the_current_os_and_architecture() {
+        let library = json!({"name": "example:library:1", "natives": {
+            "windows": "natives-windows-${arch}", "linux": "natives-linux-${arch}"
+        }, "downloads": {"artifact": {"path": "library.jar", "url": "https://example.invalid/library.jar"},
+            "classifiers": {
+                "natives-windows-64": {"path": "windows.jar", "url": "https://example.invalid/windows.jar"},
+                "natives-windows-32": {"path": "x86.jar", "url": "https://example.invalid/x86.jar"},
+                "natives-linux-64": {"path": "linux.jar", "url": "https://example.invalid/linux.jar"}
+            }
+        }});
+        let artifacts = library_artifacts(&library);
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts[0].path, "library.jar");
+        assert!(!artifacts[0].native);
+        assert_eq!(
+            artifacts[1].path,
+            if cfg!(windows) {
+                "windows.jar"
+            } else {
+                "linux.jar"
+            }
+        );
+        assert!(artifacts[1].native);
+        let foreign = json!({"name": "org.lwjgl:lwjgl:3.3.3:natives-windows-arm64",
+            "downloads": {"artifact": {"path": "arm64.jar", "url": "https://example.invalid/arm64.jar"}}});
+        assert!(library_artifacts(&foreign).is_empty());
     }
 
     #[test]

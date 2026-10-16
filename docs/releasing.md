@@ -5,24 +5,63 @@ Only the six packages under `packages/` are published; the root workspace stays
 
 ## Verify locally
 
-Use the pinned tools on Ubuntu 24.04 x64 with Java 21. From a clean checkout:
+Use the pinned tools with Java 21. Native inputs are built separately on Ubuntu
+24.04 x64 and Windows x64 from the same source and version:
 
 ```sh
 npm ci
+npm run build:native
+```
+
+Each machine produces `release/native/<platform>/` with an executable, license
+inventory and hashed manifest. Build the shared Java artifacts once on the
+canonical Linux builder:
+
+```sh
+npm run build:agents
+```
+
+Windows native builds append `-C target-feature=+crt-static` while retaining
+existing Rust flags. Their manifest records those flags and the actual PE import
+inventory; validation rejects a driver that requires a separate VCRUNTIME or
+MSVCP DLL. The toolchain is required to build, not to install the resulting package.
+
+Collect both native directories and `release/agents/` in one checkout, then run:
+
+```sh
 npm run release:check
 ```
 
 This runs TypeScript and Rust tests, live type checking, clean TypeScript/native
-builds, Java tests and Java-module compile checks, then packs and installs all six
+assembly from the prebuilt native and Java inputs, then packs and installs all six
 archives in a temporary consumer project. CLI execution, MCP handshake, bundled
 Java source loading, declaration resolution and native driver ping must pass.
 All builds are strict: missing/old JARs, mismatched versions, modified native
 artifacts and stale source hashes fail. `npm pack` checks package inputs and
-compiles TypeScript; native changes require `npm run build:release` first.
+compiles TypeScript. Native or Java source changes require rebuilding the affected
+inputs; assembly rejects either platform's missing, stale or mixed-version output.
+
+`build:release` is the final two-platform assembly entrypoint. Optional
+`--native-dir PATH --agents-dir PATH` arguments select downloaded artifact roots.
+For local game development, `build:native`, `build:agents`, then `build:dev`
+assemble only the current platform. Such bundles are marked incomplete and cannot
+pass `prepack` or `pack:check`.
+
+CI builds each native target independently, assembles one set of six archives,
+and installs that same hash-verified set on both operating systems with Node
+22.14.0 and 24.20.0. `npm run test:install` repeats the install check from
+`release/verified.json`. Windows remains a validation candidate until the native
+installation and real-game acceptance requirements in the Windows plan pass.
+
+`pack:check` sets the Linux driver's tar entry to mode 0755 and recomputes the
+tar checksum before recording archive hashes. This preserves Linux executability
+when packing on Windows, whose filesystem does not retain Unix execute bits.
+Both operating systems must install the resulting identical archives.
 
 Review `release/*.tgz` and `release/verified.json`. Run the live fixture smoke or
 the full live suite after accepting the Minecraft EULA. The manual Live game
-smoke workflow provides an explicit acceptance input and uploads failure evidence.
+smoke workflow provides an explicit acceptance input and uploads test reports and
+evidence on both success and failure.
 Routine CI does not launch or accept terms for Minecraft.
 
 For another version:

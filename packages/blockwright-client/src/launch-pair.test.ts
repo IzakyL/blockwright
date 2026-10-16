@@ -81,10 +81,11 @@ const FLAKY_CLIENT = `async (method, params) => {
 }`;
 
 test("launchPair retries a failure the policy accepts, closing the failed pair first and keeping the driver", async () => {
-  await withMockDriver({ handle: FLAKY_CLIENT }, async ({ driverPath, requests }) => {
+  await withMockDriver({ handle: FLAKY_CLIENT }, async ({ driverPath, driverArgs, requests }) => {
     const attempts: number[] = [];
     const pair = await launchPair({
       driverPath,
+      driverArgs,
       readyTimeoutMs: { server: 5_000, client: 5_000 },
       retry: { attempts: 3, when: (error) => error instanceof BlockwrightInstanceGoneError },
       onLaunchFailure: ({ attempt }) => {
@@ -114,11 +115,12 @@ test("launchPair retries a failure the policy accepts, closing the failed pair f
 });
 
 test("launchPair throws a failure the policy declines at once, and closes a driver it started", async () => {
-  await withMockDriver({ handle: FLAKY_CLIENT }, async ({ driverPath, requests }) => {
+  await withMockDriver({ handle: FLAKY_CLIENT }, async ({ driverPath, driverArgs, requests }) => {
     let calls = 0;
     await assert.rejects(
       launchPair({
         driverPath,
+      driverArgs,
         readyTimeoutMs: { server: 5_000, client: 5_000 },
         retry: { attempts: 3, when: () => false },
         onLaunchFailure: () => {
@@ -133,9 +135,9 @@ test("launchPair throws a failure the policy declines at once, and closes a driv
 });
 
 test("crashAwareRetry: a game that died failing is a crash and is not launched again", async () => {
-  await withMockDriver({ handle: FLAKY_CLIENT }, async ({ driverPath, requests }) => {
+  await withMockDriver({ handle: FLAKY_CLIENT }, async ({ driverPath, driverArgs, requests }) => {
     await assert.rejects(
-      launchPair({ driverPath, readyTimeoutMs: { server: 5_000, client: 5_000 }, retry: crashAwareRetry() }),
+      launchPair({ driverPath, driverArgs, readyTimeoutMs: { server: 5_000, client: 5_000 }, retry: crashAwareRetry() }),
       BlockwrightInstanceGoneError,
     );
     assert.equal(requests().filter((r) => r.method === "neoforge.launch").length, 2, "one attempt only");

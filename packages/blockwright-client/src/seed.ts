@@ -7,7 +7,12 @@ export function instanceDirOf(instance: string, cwd: string = process.cwd()): st
   if (!instance || instance.includes("/") || instance.includes("\\") || instance === "." || instance === "..") {
     throw new TypeError(`not an instance name: ${JSON.stringify(instance)}`);
   }
-  return path.join(cwd, ".blockwright", "instances", instance);
+  // Keep the seed in the same directory Rust's store::sanitize_name will launch from.
+  let directoryName = instance.replace(/[^A-Za-z0-9_-]/gu, "-");
+  if (process.platform === "win32" && /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(directoryName)) {
+    directoryName += "_";
+  }
+  return path.join(cwd, ".blockwright", "instances", directoryName);
 }
 
 export interface SeedCopyOptions {

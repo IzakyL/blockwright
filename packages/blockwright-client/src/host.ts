@@ -11,6 +11,7 @@ function gib(bytes: number): string {
 
 /** Java processes on this machine and their resident memory, read from /proc (Linux only). */
 function javaProcesses(): { count: number; rssBytes: number } | undefined {
+  if (process.platform !== "linux") return undefined;
   let entries: string[];
   try {
     entries = readdirSync("/proc");
@@ -40,7 +41,7 @@ function javaProcesses(): { count: number; rssBytes: number } | undefined {
 export function hostLoad(): string {
   const parts = [
     `host memory ${gib(freemem())} free of ${gib(totalmem())}`,
-    `load ${loadavg()[0].toFixed(1)} on ${cpus().length} cores`,
+    ...(process.platform === "win32" ? [`${cpus().length} cores`] : [`load ${loadavg()[0].toFixed(1)} on ${cpus().length} cores`]),
   ];
   const java = javaProcesses();
   if (java) parts.push(`${java.count} java processes using ${gib(java.rssBytes)}`);
@@ -53,14 +54,16 @@ export function hostLoad(): string {
  */
 export function dumpThreads(pid: number | undefined, javaCommand: string | undefined, tracePath: string): string | undefined {
   if (pid === undefined) return undefined;
-  const sibling = javaCommand ? join(dirname(javaCommand), "jcmd") : undefined;
-  const jcmd = sibling && existsSync(sibling) ? sibling : "jcmd";
+  const executable = process.platform === "win32" ? "jcmd.exe" : "jcmd";
+  const sibling = javaCommand ? join(dirname(javaCommand), executable) : undefined;
+  const jcmd = sibling && existsSync(sibling) ? sibling : executable;
   try {
     const output = execFileSync(jcmd, [String(pid), "Thread.print"], {
       encoding: "utf8",
       timeout: 15_000,
       maxBuffer: 64 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     });
     const path = tracePath.replace(/\.ndjson$/, "") + `.threads-${Date.now()}.txt`;
     writeFileSync(path, output);

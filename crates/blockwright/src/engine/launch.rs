@@ -74,6 +74,7 @@ pub(super) fn seed_and_launch(
                 port_file.display()
             ));
             let launch_args_file = neoforge_launch_args_file(instance_dir, resolved)?;
+            let mut args = java_arguments(instance_dir, &args, &[])?;
             args.push(format!("@{}", launch_args_file.display()));
             args.extend(neoforge.server.args.clone());
             LaunchCommand {
@@ -109,16 +110,17 @@ async fn install_neoforge_server(
         return Ok(());
     }
 
-    let output = Command::new(&neoforge.java.runtime)
-        .arg("-jar")
-        .arg(installer)
-        .arg("--installServer")
-        .arg(game_dir)
-        .current_dir(game_dir)
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .with_context(|| format!("failed to run NeoForge installer {}", installer.display()))?;
+    let output = crate::platform::process::output(
+        Command::new(&neoforge.java.runtime)
+            .arg("-jar")
+            .arg(installer)
+            .arg("--installServer")
+            .arg(game_dir)
+            .current_dir(game_dir)
+            .stdin(Stdio::null()),
+    )
+    .await
+    .with_context(|| format!("failed to run NeoForge installer {}", installer.display()))?;
 
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -154,16 +156,17 @@ async fn install_neoforge_client(
     }
     managed_client::ensure_launcher_profiles(game_dir)?;
 
-    let output = Command::new(&neoforge.java.runtime)
-        .arg("-jar")
-        .arg(installer)
-        .arg("--installClient")
-        .arg(game_dir)
-        .current_dir(game_dir)
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .with_context(|| format!("failed to run NeoForge installer {}", installer.display()))?;
+    let output = crate::platform::process::output(
+        Command::new(&neoforge.java.runtime)
+            .arg("-jar")
+            .arg(installer)
+            .arg("--installClient")
+            .arg(game_dir)
+            .current_dir(game_dir)
+            .stdin(Stdio::null()),
+    )
+    .await
+    .with_context(|| format!("failed to run NeoForge installer {}", installer.display()))?;
 
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -252,6 +255,10 @@ pub(crate) fn jar_search_dirs(loaded: &LoadedBlockwrightConfig, build_libs: &Pat
         if let Some(exe_dir) = exe.parent() {
             dirs.push(exe_dir.join("agents"));
             dirs.push(exe_dir.to_path_buf());
+            // npm bundles the driver in dist/native/<target> and shared jars in dist/agents.
+            if let Some(dist) = exe_dir.parent().and_then(Path::parent) {
+                dirs.push(dist.join("agents"));
+            }
         }
     }
     dirs
@@ -314,7 +321,7 @@ fn prepare_server_files(
 /// A reused instance dir still holds the port of its previous server; a client must not read that
 /// as the port of this one.
 fn remove_stale_port_file(port_file: &Path) -> Result<()> {
-    match fs::remove_file(port_file) {
+    match crate::platform::fs::remove_file(port_file) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
             Err(error).with_context(|| format!("failed to remove stale {}", port_file.display()))
         }
@@ -350,12 +357,137 @@ fn prepare_client_command(
         None,
         &neoforge.client.account,
     )?;
-    let mut args = blockwright_jvm_args.to_vec();
-    args.extend(launch.jvm_args);
-    args.push(launch.main_class);
-    args.extend(launch.game_args);
-    args.extend(managed_client::client_extra_game_args(&neoforge.client));
+    let mut jvm_args = blockwright_jvm_args.to_vec();
+    jvm_args.extend(launch.jvm_args);
+    let mut game_args = vec![launch.main_class];
+    game_args.extend(launch.game_args);
+    game_args.extend(managed_client::client_extra_game_args(&neoforge.client));
+    let args = java_arguments(game_dir, &jvm_args, &game_args)?;
     Ok((neoforge.java.runtime.clone(), args, game_dir.to_path_buf()))
+}
+
+/// Keep Windows command lines short. Existing user/NeoForge @files remain at the top
+/// level because Java does not recursively expand @files inside another argument file.
+fn java_arguments(
+    game_dir: &Path,
+    jvm_args: &[String],
+    game_args: &[String],
+) -> Result<Vec<String>> {
+    if !cfg!(windows) {
+        return Ok(jvm_args.iter().chain(game_args).cloned().collect());
+    }
+    if jvm_args.iter().any(|arg| arg == "--disable-@files") {
+        bail!("--disable-@files cannot be used with the Windows managed launcher, which requires Java argument files");
+    }
+    let dir = game_dir.join(".blockwright");
+    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    let mut command_args = Vec::new();
+    let mut staged = Vec::new();
+    let mut index = 0;
+    let publish =
+        |args: &mut Vec<String>, command_args: &mut Vec<String>, index: &mut usize| -> Result<()> {
+            if args.is_empty() {
+                return Ok(());
+            }
+            let relative = Path::new(".blockwright").join(format!("launch-{}.args", *index));
+            write_replacing(&game_dir.join(&relative), java_argument_file(args)?)?;
+            command_args.push(format!("@{}", relative.display()));
+            args.clear();
+            *index += 1;
+            Ok(())
+        };
+    for arg in jvm_args {
+        if arg.starts_with('@') {
+            publish(&mut staged, &mut command_args, &mut index)?;
+            command_args.push(arg.clone());
+        } else {
+            staged.push(arg.clone());
+        }
+    }
+    staged.extend_from_slice(game_args);
+    publish(&mut staged, &mut command_args, &mut index)?;
+    Ok(command_args)
+}
+
+fn java_argument_file(args: &[String]) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    for arg in args {
+        out.push(b'"');
+        // Escape after native encoding: a DBCS character can contain byte 0x5c,
+        // which Java's byte-oriented argument-file parser would treat as a backslash.
+        for byte in java_native_bytes(arg)? {
+            match byte {
+                0 => bail!("Java launch argument contains a NUL character"),
+                b'\\' => out.extend_from_slice(b"\\\\"),
+                b'"' => out.extend_from_slice(b"\\\""),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\t' => out.extend_from_slice(b"\\t"),
+                12 => out.extend_from_slice(b"\\f"),
+                byte => out.push(byte),
+            }
+        }
+        out.extend_from_slice(b"\"\n");
+    }
+    Ok(out)
+}
+
+fn java_native_bytes(arg: &str) -> Result<Vec<u8>> {
+    #[cfg(unix)]
+    return Ok(arg.as_bytes().to_vec());
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Globalization::{
+            GetACP, WideCharToMultiByte, CP_UTF8, WC_NO_BEST_FIT_CHARS,
+        };
+        let code_page = unsafe { GetACP() };
+        if code_page == CP_UTF8 {
+            return Ok(arg.as_bytes().to_vec());
+        }
+        let wide: Vec<u16> = arg.encode_utf16().collect();
+        if wide.is_empty() {
+            return Ok(Vec::new());
+        }
+        let len = i32::try_from(wide.len()).context("Java argument is too large")?;
+        let mut substituted = 0;
+        let size = unsafe {
+            WideCharToMultiByte(
+                code_page,
+                WC_NO_BEST_FIT_CHARS,
+                wide.as_ptr(),
+                len,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                &mut substituted,
+            )
+        };
+        if size == 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to encode Java argument file");
+        }
+        let mut bytes = vec![0u8; size as usize];
+        let converted = unsafe {
+            WideCharToMultiByte(
+                code_page,
+                WC_NO_BEST_FIT_CHARS,
+                wide.as_ptr(),
+                len,
+                bytes.as_mut_ptr(),
+                size,
+                std::ptr::null(),
+                &mut substituted,
+            )
+        };
+        if converted == 0 {
+            return Err(std::io::Error::last_os_error())
+                .context("failed to encode Java argument file");
+        }
+        if substituted != 0 {
+            bail!("Java 21 on Windows reads argument files using system code page {code_page}; a launch argument contains characters it cannot represent. Use a path/account name supported by that code page, or a Windows UTF-8 system locale");
+        }
+        Ok(bytes)
+    }
 }
 
 /// The JVM args Blockwright adds ahead of NeoForge's own. The coverage agent goes first of all,
@@ -387,6 +519,136 @@ mod tests {
     use super::*;
     use crate::config::ClientConfig;
     use crate::test_support::TempDir;
+
+    #[test]
+    fn java_argument_files_quote_empty_values_paths_quotes_and_control_characters() {
+        let args = [
+            "",
+            "C:\\Program Files\\Java\\",
+            "a\"b",
+            "#comment",
+            "line\nnext\r\t\x0c",
+            "@literal",
+        ]
+        .map(str::to_string);
+        let encoded = java_argument_file(&args).unwrap();
+        assert_eq!(String::from_utf8(encoded).unwrap(), "\"\"\n\"C:\\\\Program Files\\\\Java\\\\\"\n\"a\\\"b\"\n\"#comment\"\n\"line\\nnext\\r\\t\\f\"\n\"@literal\"\n");
+        assert!(java_argument_file(&["nul\0value".to_string()]).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn user_argument_files_stay_at_the_top_level() {
+        let temp = TempDir::new("java-top-level");
+        let args = java_arguments(
+            temp.path(),
+            &[
+                "-Xmx1G".to_string(),
+                "@user.args".to_string(),
+                "-Dkey=value".to_string(),
+            ],
+            &["Main".to_string()],
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            [
+                "@.blockwright\\launch-0.args",
+                "@user.args",
+                "@.blockwright\\launch-1.args"
+            ]
+        );
+        assert!(
+            !fs::read_to_string(temp.path().join(".blockwright/launch-0.args"))
+                .unwrap()
+                .contains("@user.args")
+        );
+        assert!(java_arguments(temp.path(), &["--disable-@files".to_string()], &[]).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires a Java 21 JDK on PATH; run during platform qualification"]
+    fn java_argument_files_round_trip_long_classpaths_and_unicode_with_a_real_jdk() {
+        let temp = TempDir::new("java-arguments 中文 spaces");
+        let classes = temp.path().join("classes 中文");
+        fs::create_dir_all(&classes).unwrap();
+        temp.write("LaunchProbe.java", r#"class LaunchProbe {
+static void emit(String value) {
+  System.out.println(value.codePoints().mapToObj(Integer::toHexString).collect(java.util.stream.Collectors.joining(",")));
+}
+public static void main(String[] args) {
+  emit(System.getProperty("probe.value"));
+  for (String arg : args) emit(arg);
+} }"#);
+        let compiled = std::process::Command::new("javac")
+            .args(["-encoding", "UTF-8", "-d"])
+            .arg(&classes)
+            .arg(temp.path().join("LaunchProbe.java"))
+            .output()
+            .expect("Java 21 javac is required for this test");
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let classpath = env::join_paths(std::iter::repeat_n(&classes, 800))
+            .unwrap()
+            .into_string()
+            .unwrap();
+        assert!(classpath.len() > 32767);
+        let values = [
+            "",
+            "a\"b",
+            "C:\\trailing path\\",
+            "line\nnext\r\t\x0c",
+            "#literal",
+            "@literal",
+            "中文 空格",
+            "💻",
+        ];
+        // Java 21's Windows launcher may use a legacy ANSI code page. Unsupported
+        // characters are rejected explicitly instead of silently corrupting paths.
+        let values: Vec<&str> = values
+            .into_iter()
+            .filter(|value| java_native_bytes(value).is_ok())
+            .collect();
+        let prefix = vec![
+            "-Dprobe.value=中文 路径".to_string(),
+            "-cp".to_string(),
+            classpath,
+        ];
+        let mut tail = vec!["LaunchProbe".to_string()];
+        tail.extend(values.iter().map(|value| value.to_string()));
+        let args = java_arguments(temp.path(), &prefix, &tail).unwrap();
+        let result = std::process::Command::new("java")
+            .args(args)
+            .current_dir(temp.path())
+            .output()
+            .expect("Java 21 java is required for this test");
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        // ASCII code-point output avoids console encoding and includes empty/control values.
+        let expected: Vec<String> = std::iter::once("中文 路径")
+            .chain(values)
+            .map(|value| {
+                value
+                    .chars()
+                    .map(|ch| format!("{:x}", ch as u32))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .collect();
+        assert_eq!(
+            String::from_utf8(result.stdout)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
 
     #[test]
     fn server_requires_explicit_eula_even_when_reusing_an_accepted_world() {

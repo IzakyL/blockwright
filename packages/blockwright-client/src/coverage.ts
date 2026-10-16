@@ -35,7 +35,7 @@ function configArgs(options: CoverageOptions): string[] {
 function runCoverage(args: string[], options: CoverageOptions): Promise<string> {
   const binary = resolveBinaryPath(options.driverPath);
   return new Promise((resolve, reject) => {
-    execFile(binary, ["coverage", ...args], { cwd: options.cwd ?? process.cwd(), maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    execFile(binary, ["coverage", ...args], { cwd: options.cwd ?? process.cwd(), maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(`blockwright coverage ${args[0]} failed: ${stderr.trim() || error.message}`));
         return;

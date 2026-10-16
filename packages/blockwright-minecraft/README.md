@@ -6,11 +6,19 @@ Typed Minecraft world, client, media and UI operations. Includes Java source mod
 npm install @izakyl/blockwright-minecraft
 ```
 
-Linux x64 only, Node >=22.14, ESM. The initial native release targets Ubuntu 24.04
+Released baseline: Linux x64, Node >=22.14, ESM. The initial native release targets Ubuntu 24.04
 (glibc 2.39, OpenSSL 3). Game launches need a Java 21 JDK and client graphics libraries.
 Minecraft 1.21.1 / NeoForge 21.1.233 is the supported game pair.
 The published client dependency includes the driver and agents; Rust and Gradle
 are not required by package consumers.
+
+Windows 11 x64 is a development candidate, pending complete installed-package,
+real-game and Linux regression qualification. Candidate clients use an interactive
+GPU desktop with `device = "auto"` or `"gpu"`; software/index modes are rejected.
+Java 21 paths must be representable in the Windows system code page, and Windows
+and WSL need separate stores. The complete bundle includes both native targets
+and shared agents, with static Windows CRT; consumers need no Rust, Gradle or
+separate Visual C++ runtime. See the [candidate setup](https://github.com/IzakyL/blockwright/blob/master/docs/environment.md#windows-development-candidate).
 
 ## Example
 

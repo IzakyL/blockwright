@@ -39,12 +39,12 @@ class SnippetModulesTest {
     @BeforeEach
     void clean() {
         SnippetModules.reset();
-            }
+    }
 
     @AfterEach
     void drain() {
         SnippetModules.reset();
-            }
+    }
 
     @Test
     void skipsTheBootLayerAndSaysWhereItLooked() {
@@ -81,28 +81,41 @@ class SnippetModulesTest {
     @Test
     void listsAndCompilesAgainstAnExplodedModuleInItsOwnLayer(@TempDir Path work) throws Throwable {
         ModuleLayer layer = layer(moduleTree(work, false));
-        SnippetModules.Index index = SnippetModules.index(Set.of(layer), List.of());
+        try (SnippetModules.Index index = SnippetModules.index(Set.of(layer), List.of())) {
+            assertEquals(List.of("probe"), index.moduleNames());
+            assertEquals(1, index.moduleCount());
+            assertEquals(List.of("probe.Beacon"), names(index.classes("probe", false)));
+            assertEquals(List.of("probe.Beacon"), names(index.classes("", true)));
+            assertTrue(index.classes("java.lang", false).isEmpty());
+            assertTrue(index.classes("probe.Beacon", false).isEmpty());
+            assertTrue(index.classes("probe", false).get(0).read().length > 0);
 
-        assertEquals(List.of("probe"), index.moduleNames());
-        assertEquals(1, index.moduleCount());
-        assertEquals(List.of("probe.Beacon"), names(index.classes("probe", false)));
-        assertEquals(List.of("probe.Beacon"), names(index.classes("", true)));
-        assertTrue(index.classes("java.lang", false).isEmpty());
-        assertTrue(index.classes("probe.Beacon", false).isEmpty());
-        assertTrue(index.classes("probe", false).get(0).read().length > 0);
-
-        SnippetModules.install(index, layer.findLoader("probe"));
-        assertEquals("pong:live:beacon", new TaskCompiler().task(TYPED).invoke(null));
+            SnippetModules.install(index, layer.findLoader("probe"));
+            assertEquals("pong:live:beacon", new TaskCompiler().task(TYPED).invoke(null));
+        }
     }
 
     @Test
     void listsAndCompilesAgainstAModularJarInItsOwnLayer(@TempDir Path work) throws Throwable {
-        ModuleLayer layer = layer(moduleTree(work, true));
-        SnippetModules.Index index = SnippetModules.index(Set.of(layer), List.of());
-
-        assertEquals(List.of("probe.Beacon"), names(index.classes("probe", false)));
-        SnippetModules.install(index, layer.findLoader("probe"));
-        assertEquals("pong:live:beacon", new TaskCompiler().task(TYPED).invoke(null));
+        Path modules = moduleTree(work, true);
+        Path jar = modules.resolve("probe.jar");
+        // The JDK's defineModulesWithOneLoader loader has no public close API and holds its JAR
+        // until GC. Give this test-owned module layer a closeable loader instead.
+        try (URLClassLoader loader = new URLClassLoader(new URL[] {jar.toUri().toURL()},
+                 SnippetModulesTest.class.getClassLoader())) {
+            ModuleFinder finder = ModuleFinder.of(modules);
+            Configuration configuration = ModuleLayer.boot().configuration()
+                .resolve(finder, ModuleFinder.of(), Set.of("probe"));
+            ModuleLayer layer = ModuleLayer.boot().defineModules(configuration, name -> loader);
+            try (SnippetModules.Index index = SnippetModules.index(Set.of(layer), List.of())) {
+                assertEquals(List.of("probe.Beacon"), names(index.classes("probe", false)));
+                SnippetModules.install(index, loader);
+                assertEquals("pong:live:beacon", new TaskCompiler().task(TYPED).invoke(null));
+                assertEquals(layer.findModule("probe").orElseThrow(), loader.loadClass("probe.Beacon").getModule());
+            }
+        }
+        Files.delete(jar);
+        assertFalse(Files.exists(jar), "the module index and test-owned loader must release the JAR");
     }
 
     @Test
