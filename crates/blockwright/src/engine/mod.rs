@@ -15,6 +15,7 @@ use crate::config::{InstanceRole, LoadedBlockwrightConfig, WorldPreset};
 use crate::coverage;
 use crate::mods;
 use crate::neoforge::{self, NeoForgeRuntimeRequirements, ResolvedNeoForgeVersions};
+use crate::platform::fs as platform_fs;
 use crate::registry;
 use crate::store::{self, cache, StoreLock};
 
@@ -114,7 +115,7 @@ impl LaunchLock {
             .unwrap_or_default()
             .to_string_lossy();
         let path = parent.join(format!(".{name}.lock"));
-        let Some(instance) = store::flock(&path, libc::LOCK_EX | libc::LOCK_NB)? else {
+        let Some(instance) = store::lock_file(&path, store::LockMode::TryExclusive)? else {
             anyhow::bail!(
                 "another launch is already filling {}; wait for it, or launch under another \
                  instance name",
@@ -137,6 +138,9 @@ pub async fn prepare_launch(
     let config = &loaded.config;
     let neoforge_config = &config.neoforge;
     let role = options.role;
+    if role == InstanceRole::Client {
+        neoforge_config.client.display.validate()?;
+    }
     if role == InstanceRole::Server && !neoforge_config.server.eula {
         anyhow::bail!("Minecraft EULA acceptance is required: read https://www.minecraft.net/eula and set [neoforge.server] eula = true in your config to accept it");
     }
@@ -157,7 +161,7 @@ pub async fn prepare_launch(
     if !(options.reuse_instance_dir || options.keep_instance_dir) && instance_dir.exists() {
         let doomed = instance_dir.clone();
         blocking(move || {
-            fs::remove_dir_all(&doomed)
+            platform_fs::remove_dir_all(&doomed)
                 .with_context(|| format!("failed to clear instance dir {}", doomed.display()))
         })
         .await?;
@@ -175,12 +179,7 @@ pub async fn prepare_launch(
     let requirements = neoforge::runtime_requirements(neoforge_config, &resolved);
     let mut warnings = Vec::new();
 
-    let runtime_key = format!(
-        "{}-{}-{}",
-        role.as_str(),
-        resolved.minecraft_version,
-        resolved.loader_version
-    );
+    let runtime_key = runtime_key(role, &resolved.minecraft_version, &resolved.loader_version);
     let runtime = ensure_runtime(loaded, role, &resolved, &store_dir, &runtime_key)
         .await
         .context("failed to install the NeoForge runtime")?;
@@ -291,10 +290,10 @@ async fn instance_mods(
 
 fn refuse_running_instance_dir(instance_dir: &Path) -> Result<()> {
     let root = std::env::current_dir().context("failed to resolve current directory")?;
-    if let Some(record) = registry::list(&root)
-        .into_iter()
-        .find(|record| record.instance_dir == instance_dir)
-    {
+    if let Some(record) = registry::list(&root).into_iter().find(|record| {
+        record.instance_dir == instance_dir
+            || platform_fs::same_file(&record.instance_dir, instance_dir)
+    }) {
         anyhow::bail!(
             "instance {} (pid {}) is still running in {}; close the session that owns it, or \
              launch under another instance name",
@@ -306,8 +305,19 @@ fn refuse_running_instance_dir(instance_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The cache schema is part of the key, so older layouts are rebuilt rather than migrated
+/// in place. Native libraries and launch files also make runtimes platform-specific.
+fn runtime_key(role: InstanceRole, minecraft: &str, loader: &str) -> String {
+    format!(
+        "v2-{}-{}-{}-{minecraft}-{loader}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        role.as_str()
+    )
+}
+
 /// The installed runtime (loader, libraries, assets) a role launches from, built once per
-/// Minecraft and loader version and shared by every instance through hardlinks.
+/// platform, cache schema, Minecraft and loader version.
 async fn ensure_runtime(
     loaded: &LoadedBlockwrightConfig,
     role: InstanceRole,
@@ -328,9 +338,9 @@ async fn ensure_runtime(
             "runtime has truncated or missing files; rebuilding it"
         );
         let trash = root.join(format!(".trash-{}", Uuid::new_v4()));
-        if fs::rename(&dir, &trash).is_ok() {
-            let _ = blocking(move || Ok(fs::remove_dir_all(&trash)?)).await;
-        }
+        fs::rename(&dir, &trash)
+            .with_context(|| format!("failed to move damaged runtime {} aside", dir.display()))?;
+        let _ = blocking(move || Ok(platform_fs::remove_dir_all(&trash)?)).await;
     }
     let staging = root.join(format!(".staging-{}", Uuid::new_v4()));
     fs::create_dir_all(&staging)
@@ -351,10 +361,10 @@ async fn ensure_runtime(
     .await;
     // A concurrent launch may have published the same runtime first; either copy will do.
     let published = built.and_then(|()| match fs::rename(&staging, &dir) {
-        Err(_) if dir.is_dir() => Ok(()),
+        Err(_) if dir.is_dir() && adopt_runtime(&dir) => Ok(()),
         other => other.with_context(|| format!("failed to publish {}", dir.display())),
     });
-    let _ = fs::remove_dir_all(&staging);
+    let _ = platform_fs::remove_dir_all(&staging);
     published.map(|()| dir)
 }
 
@@ -382,7 +392,6 @@ fn runtime_placement(rel: &Path) -> cache::Placement {
 /// Instances hardlink these files, so a write through any of those links would change every
 /// instance and the store at once; read-only, such a write fails where it happens instead.
 fn seal_runtime(dir: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let mut sizes = BTreeMap::new();
     for entry in walkdir::WalkDir::new(dir) {
         let entry = entry.with_context(|| format!("failed to walk {}", dir.display()))?;
@@ -391,8 +400,7 @@ fn seal_runtime(dir: &Path) -> Result<()> {
             continue;
         }
         let meta = entry.metadata()?;
-        let mode = meta.permissions().mode() & 0o555;
-        fs::set_permissions(entry.path(), fs::Permissions::from_mode(mode))
+        platform_fs::set_readonly(entry.path())
             .with_context(|| format!("failed to make {} read-only", entry.path().display()))?;
         sizes.insert(rel.to_string_lossy().into_owned(), meta.len());
     }
@@ -402,7 +410,7 @@ fn seal_runtime(dir: &Path) -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     cache::write_replacing(&manifest, serde_json::to_vec(&sizes)?)?;
-    fs::set_permissions(&manifest, fs::Permissions::from_mode(0o444))
+    platform_fs::set_readonly(&manifest)
         .with_context(|| format!("failed to make {} read-only", manifest.display()))
 }
 
@@ -502,26 +510,53 @@ mod tests {
 
     #[test]
     fn a_sealed_runtime_is_read_only_and_checks_out_until_a_file_is_truncated() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let tmp = TempDir::new("runtime-seal");
         tmp.write("runtime/libraries/a.jar", "library");
         tmp.write("runtime/run.sh", "#!/bin/sh");
         let dir = tmp.path().join("runtime");
+        #[cfg(unix)]
         fs::set_permissions(dir.join("run.sh"), fs::Permissions::from_mode(0o775)).unwrap();
 
         seal_runtime(&dir).unwrap();
 
-        let mode = |rel: &str| fs::metadata(dir.join(rel)).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode("libraries/a.jar"), 0o444);
-        assert_eq!(mode("run.sh"), 0o555, "the exec bits stay");
-        let root = unsafe { libc::geteuid() } == 0;
-        assert!(root || fs::write(dir.join("libraries/a.jar"), b"").is_err());
+        assert!(fs::metadata(dir.join("libraries/a.jar"))
+            .unwrap()
+            .permissions()
+            .readonly());
+        #[cfg(unix)]
+        {
+            let mode =
+                |rel: &str| fs::metadata(dir.join(rel)).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode("libraries/a.jar"), 0o444);
+            assert_eq!(mode("run.sh"), 0o555, "the exec bits stay");
+            let root = unsafe { libc::geteuid() } == 0;
+            assert!(root || fs::write(dir.join("libraries/a.jar"), b"").is_err());
+        }
+        #[cfg(windows)]
+        assert!(fs::write(dir.join("libraries/a.jar"), b"").is_err());
         assert!(adopt_runtime(&dir));
 
         // What a copy through a shared link left behind: the same name, zero bytes.
-        fs::remove_file(dir.join("libraries/a.jar")).unwrap();
+        platform_fs::remove_file(&dir.join("libraries/a.jar")).unwrap();
         fs::write(dir.join("libraries/a.jar"), b"").unwrap();
         assert!(!adopt_runtime(&dir));
+    }
+
+    #[test]
+    fn runtime_cache_key_separates_platform_architecture_and_schema() {
+        let key = runtime_key(InstanceRole::Server, "1.21.1", "21.1.233");
+        assert_eq!(
+            key,
+            format!(
+                "v2-{}-{}-server-1.21.1-21.1.233",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            )
+        );
+        assert_ne!(key, "server-1.21.1-21.1.233");
+        assert_ne!(key, runtime_key(InstanceRole::Client, "1.21.1", "21.1.233"));
     }
 
     #[test]

@@ -44,6 +44,19 @@ final class NeoForgeThreads implements GameThreads {
         return clientDist && ClientSide.onThread();
     }
 
+    /** Requests vanilla's normal save/exit path on the owning game thread. */
+    void shutdown() {
+        if (clientDist) {
+            ClientSide.shutdown();
+            return;
+        }
+        MinecraftServer server = server();
+        if (server == null) {
+            throw new IllegalStateException("server is not available for normal shutdown");
+        }
+        server.execute(() -> server.halt(false));
+    }
+
     /** Kept apart so dedicated servers never load client classes. */
     private static final class ClientSide {
         private ClientSide() {
@@ -57,6 +70,14 @@ final class NeoForgeThreads implements GameThreads {
         static boolean onThread() {
             net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
             return minecraft != null && minecraft.isSameThread();
+        }
+
+        static void shutdown() {
+            net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (minecraft == null) {
+                throw new IllegalStateException("client is not available for normal shutdown");
+            }
+            minecraft.execute(minecraft::stop);
         }
     }
 }

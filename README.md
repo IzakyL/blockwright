@@ -10,6 +10,12 @@ The npm packages are ESM. The native release baseline is Ubuntu 24.04 (glibc 2.3
 OpenSSL 3); other distributions, musl/Alpine, ARM, macOS and Windows are not in the
 supported release matrix. See [environment setup](docs/environment.md).
 
+Windows 11 x64 is a development candidate with a hidden GPU window. Qualification
+and packaging work is tracked in the [Windows plan](docs/windows-support-plan.md);
+see [candidate requirements](docs/environment.md#windows-development-candidate)
+and [local builds](CONTRIBUTING.md) before trying it. This does not expand the
+published release support matrix yet.
+
 | Package | Purpose |
 | --- | --- |
 | `@izakyl/blockwright-client` | Native Rust driver, bundled Java agents and low-level SDK |

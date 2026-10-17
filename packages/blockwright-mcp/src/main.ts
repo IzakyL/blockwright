@@ -8,7 +8,8 @@ async function main(): Promise<void> {
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
     process.stdout.write(`Usage: blockwright-mcp [options]
 
-Minecraft automation over MCP stdio. Requires Linux x64 and Java 21.
+Minecraft automation over MCP stdio. Requires Java 21.
+Released baseline: Linux x64; Windows x64 candidate.
   --config PATH           Blockwright TOML configuration
   --cwd PATH              Working directory for game instances
   --cli PATH              Override the bundled driver
@@ -31,11 +32,18 @@ Minecraft automation over MCP stdio. Requires Linux x64 and Java 21.
       return;
     }
     closing = true;
-    await session.close();
-    process.exit(0);
+    try {
+      await session.close();
+      process.exit(0);
+    } catch (error) {
+      process.stderr.write(`Blockwright shutdown failed: ${String(error)}\n`);
+      process.exit(1);
+    }
   };
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
+  // The host can end stdio without sending a signal, including on Windows.
+  process.stdin.once("end", () => void shutdown());
 
   await server.connect(new StdioServerTransport());
 }

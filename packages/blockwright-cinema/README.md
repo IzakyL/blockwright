@@ -7,8 +7,18 @@ Camera paths, time curves and frame-stepped timelapse capture on top of
 npm install @izakyl/blockwright-cinema @izakyl/blockwright-minecraft
 ```
 
-Linux x64 only, Node >=22.14, ESM. Encoding the finished frames needs `ffmpeg` on
+Released baseline: Linux x64, Node >=22.14, ESM. Encoding the finished frames needs `ffmpeg` on
 PATH. Minecraft 1.21.1 / NeoForge 21.1.233 is the supported game pair.
+
+Shader-pack seeding uses Windows' built-in `tar.exe`; Linux needs `unzip` on PATH.
+
+Windows 11 x64 is a development candidate, pending complete installed-package,
+real-game and Linux regression qualification. Candidate clients use an interactive
+GPU desktop with `device = "auto"` or `"gpu"`; software/index modes are rejected.
+Java 21 paths must be representable in the Windows system code page, and Windows
+and WSL need separate stores. The complete bundle includes both native targets
+and shared agents, with static Windows CRT; consumers need no Rust, Gradle or
+separate Visual C++ runtime. See the [candidate setup](https://github.com/IzakyL/blockwright/blob/master/docs/environment.md#windows-development-candidate).
 
 ## How it works
 

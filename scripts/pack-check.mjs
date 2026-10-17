@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { root, order, packageDir, run, json, checkVersions, sha256 } from './release-lib.mjs';
+import { basename, join } from 'node:path';
+import { root, order, packageDir, run, json, checkVersions, sha256, currentTarget } from './release-lib.mjs';
+import { normalizeLinuxDriverMode, verifyLinuxDriverMode } from './tar-mode.mjs';
 
 const version = checkVersions();
 const output = join(root, 'release');
@@ -19,7 +20,12 @@ try {
     for (const file of [pkg.main, pkg.types, 'LICENSE', 'README.md', ...Object.values(pkg.bin ?? {})]) assert(paths.has(file), `${pkg.name}: missing ${file}`);
     for (const file of paths) assert(!/\.test\.|\.tsbuildinfo|(^|\/)\.env|node_modules\//.test(file), `Unexpected package file: ${file}`);
     if (pkg.files.includes('java')) assert([...paths].some(f => f.endsWith('.java')));
-    archives.push(join(scratch, info.filename));
+    const archive = join(scratch, info.filename);
+    if (name === 'client') {
+      normalizeLinuxDriverMode(archive);
+      verifyLinuxDriverMode(archive);
+    }
+    archives.push(archive);
   }
   const consumer = join(scratch, 'consumer');
   mkdirSync(consumer);
@@ -29,9 +35,12 @@ try {
   run('node', ['smoke.mjs'], { cwd: consumer, timeout: 60_000 });
   cpSync(join(root, 'examples/playwright/smoke.spec.ts'), join(consumer, 'smoke.spec.ts'));
   writeFileSync(join(consumer, 'types.mts'), order.map(name => `import * as ${name} from '@izakyl/blockwright-${name}'; void ${name};`).join('\n'));
-  run(join(root, 'node_modules/.bin/tsc'), ['--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', 'types.mts', 'smoke.spec.ts'], { cwd: consumer });
-  for (const archive of archives) cpSync(archive, join(output, archive.split('/').at(-1)));
-  writeFileSync(join(output, 'verified.json'), JSON.stringify({ version, archives: archives.map(p => p.split('/').at(-1)), sha256: Object.fromEntries(archives.map(p => [p.split('/').at(-1), sha256(p)])) }, null, 2) + '\n');
+  run('node', [join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', 'types.mts', 'smoke.spec.ts'], { cwd: consumer });
+  for (const archive of archives) cpSync(archive, join(output, basename(archive)));
+  const bundle = json(join(packageDir('client'), 'dist/bundle-manifest.json'));
+  writeFileSync(join(output, 'verified.json'), JSON.stringify({ schemaVersion: 1, version, sourceHash: bundle.sourceHash,
+    targets: Object.keys(bundle.targets).sort(), verifiedOn: currentTarget(), archives: archives.map(path => basename(path)),
+    sha256: Object.fromEntries(archives.map(path => [basename(path), sha256(path)])) }, null, 2) + '\n');
   console.log(`All ${archives.length} archives verified outside the workspace; ready in release/.`);
 } finally {
   rmSync(scratch, { recursive: true, force: true });

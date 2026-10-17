@@ -17,6 +17,17 @@ test("an instance dir sits under .blockwright/instances of the driver's director
   assert.throws(() => instanceDirOf("", "/repo"), TypeError);
 });
 
+test("seed paths use the driver's ASCII name cleaning and Windows device protection", () => {
+  assert.equal(path.basename(instanceDirOf("tail. ")), "tail--");
+  assert.equal(path.basename(instanceDirOf("世界🙂")), "---");
+  for (const name of ["CON", "con", "PRN", "AUX", "NUL", "COM1", "COM9", "LPT1", "LPT9"]) {
+    assert.equal(path.basename(instanceDirOf(name)), process.platform === "win32" ? `${name}_` : name);
+  }
+  for (const name of ["console", "COM0", "COM10", "LPT0", "LPT10"]) {
+    assert.equal(path.basename(instanceDirOf(name)), name);
+  }
+});
+
 test("a seed writes and copies into the instance dir and launches into it as it is", () => {
   const { dir, done } = scratch();
   try {

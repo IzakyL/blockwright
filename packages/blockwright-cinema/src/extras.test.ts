@@ -91,17 +91,23 @@ test("judgeIris wants the pack loaded and a pipeline built, and no fallback", ()
 });
 
 test("a shader pack is unpacked, patched and named to Iris; its evidence is read from the logs, rolled ones too", (t) => {
-  const scratch = mkdtempSync(path.join(tmpdir(), "bw-shaders-"));
+  const scratch = mkdtempSync(path.join(tmpdir(), "bw shaders "));
   try {
     const source = path.join(scratch, "source");
     mkdirSync(path.join(source, "shaders"), { recursive: true });
     writeFileSync(path.join(source, "shaders", "final.fsh"), "vec4 color = a * vec4(b.rgb, 1.0);\n");
     const zip = path.join(scratch, "Pack-A.zip");
-    try {
-      execFileSync("zip", ["-qr", zip, "shaders"], { cwd: source });
-    } catch {
-      t.skip("zip is not on PATH");
-      return;
+    if (process.platform === "win32") {
+      const tar = path.join(process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows", "System32", "tar.exe");
+      execFileSync(tar, ["-a", "-cf", zip, "-C", source, "shaders"], { windowsHide: true });
+      assert.deepEqual(readFileSync(zip).subarray(0, 4), Buffer.from([80, 75, 3, 4]), "the fixture is a genuine ZIP");
+    } else {
+      try {
+        execFileSync("zip", ["-qr", zip, "shaders"], { cwd: source });
+      } catch {
+        t.skip("zip is not on PATH");
+        return;
+      }
     }
     const instance = path.join(scratch, "instance");
     const name = seedShaderPack(instance, {

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — Windows candidate
+
+- Add Windows x64 native process ownership, independent instance files, platform
+  runtime caches and a hidden GLFW/WGL GPU client backend. Windows remains a
+  qualification candidate; the released Linux support boundary is unchanged.
+- Add idempotent `BlockwrightDriver.closeAsync()` for EOF shutdown, saved game
+  cleanup and output draining. `close()` starts it synchronously; pair/fixture/MCP
+  teardown waits and reports driver shutdown failure.
+- Increase the default shutdown grace to 30 seconds so initial chunk saves can
+  finish; explicit `graceMs` overrides and the driver's total cleanup budget
+  still bound shutdown.
+- Build native targets separately and assemble one complete six-package set with
+  platform/source/hash checks and shared Java agents. Windows release drivers use
+  static MSVC CRT; consumers need no Rust, Gradle or separate VC runtime install.
+- Add Windows build/install CI and an explicit-EULA, interactive self-hosted GPU
+  qualification workflow. Candidate clients require `auto`/`gpu`, representable
+  Java 21 ACP paths, and separate Windows/WSL stores; software and indexed GPU
+  rendering are rejected.
+
 ## 0.1.0-alpha.1 — 2026-10-13
 
 - New package `@izakyl/blockwright-cinema`: smooth keyframed camera paths and orbits,

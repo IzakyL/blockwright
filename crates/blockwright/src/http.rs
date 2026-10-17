@@ -64,18 +64,8 @@ pub(crate) async fn download(url: &str, dest: &Path) -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let bytes = get_bytes(url).await?;
-    let name = dest
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("download");
-    let tmp = dest.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
-    tokio_fs::write(&tmp, &bytes)
-        .await
-        .with_context(|| format!("failed to write {}", tmp.display()))?;
-    tokio_fs::rename(&tmp, dest)
-        .await
-        .with_context(|| format!("failed to move {}", dest.display()))?;
-    Ok(())
+    let dest = dest.to_path_buf();
+    crate::engine::blocking(move || crate::store::cache::write_replacing(&dest, bytes)).await
 }
 
 /// GETs `url`, waiting out one rate-limit response, and fails on an error status.

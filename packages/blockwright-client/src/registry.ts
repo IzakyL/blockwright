@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import type { InstanceRole } from "./types-launch.js";
 
@@ -12,6 +12,10 @@ export interface InstanceRecord {
   tracePath?: string | null;
   config?: string | null;
   startedAt: string;
+  /** Native process creation identity, when the driver could inspect it. */
+  processIdentity?: string | null;
+  /** Driver target, e.g. linux-x64 or win32-x64; foreign records cannot be inspected locally. */
+  platform?: string | null;
 }
 
 export function registryDir(root: string = process.cwd()): string {
@@ -19,14 +23,26 @@ export function registryDir(root: string = process.cwd()): string {
 }
 
 export function instanceAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff) return false;
+  if (process.platform !== "linux") return processExists(pid);
   let stat: string;
   try {
     stat = readFileSync(`/proc/${pid}/stat`, "utf8");
   } catch {
-    return existsSync(`/proc/${pid}`);
+    return processExists(pid);
   }
   const tail = stat.slice(stat.lastIndexOf(")") + 1).trim();
   return tail.split(/\s+/)[0] !== "Z";
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // Access denied or an unknown result is not evidence that a process has died.
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }
 
 export function listInstances(root: string = process.cwd()): InstanceRecord[] {
@@ -44,7 +60,7 @@ export function listInstances(root: string = process.cwd()): InstanceRecord[] {
     }
     try {
       const record = JSON.parse(readFileSync(join(dir, name), "utf8")) as InstanceRecord;
-      if (typeof record.pid === "number" && instanceAlive(record.pid)) {
+      if (typeof record.pid === "number" && (record.platform && record.platform !== `${process.platform}-${process.arch}` || instanceAlive(record.pid))) {
         records.push(record);
       }
     } catch {

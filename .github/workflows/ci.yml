@@ -17,8 +17,17 @@ jobs:
           echo '9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  /tmp/gitleaks.tar.gz' | sha256sum -c -
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           /tmp/gitleaks git --redact --log-opts=--all .
-  build:
-    runs-on: ubuntu-24.04
+  native:
+    name: Native and tests (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-x64
+          - os: windows-2025
+            target: win32-x64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,22 +40,77 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
       - name: Install native build requirements
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
       - run: rustup show
       - run: npm install --global npm@12.0.2
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
-      - run: npm run release:check
+      - run: npm test
+      - run: npm run typecheck:live
+      - run: cargo test --locked
+      - run: npm run test:java
+      - run: npm run test:release
+      - run: npm run build:native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: release/native/
+          if-no-files-found: error
+  agents:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm run build:agents
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canonical-agents
+          path: release/agents/
+          if-no-files-found: error
+  assemble:
+    needs: [native, agents]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm install --global npm@12.0.2
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: release/native
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: canonical-agents
+          path: release/agents
+      - run: npm run build:release
+      - run: npm run test:release
+      - run: npm run pack:check
       - uses: actions/upload-artifact@v4
         with:
           name: npm-packages
-          path: release/
+          path: |
+            release/*.tgz
+            release/verified.json
           if-no-files-found: error
   install:
-    needs: build
-    runs-on: ubuntu-24.04
+    needs: assemble
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-24.04, windows-2025]
         node: ['22.14.0', '24.20.0']
     steps:
       - uses: actions/checkout@v4
@@ -57,11 +121,5 @@ jobs:
         with:
           name: npm-packages
           path: release
-      - name: Install and exercise packages outside the checkout
-        run: |
-          consumer=$(mktemp -d)
-          cp scripts/package-smoke.mjs "$consumer/smoke.mjs"
-          printf '{"private":true,"type":"module"}\n' > "$consumer/package.json"
-          npm install --prefix "$consumer" --ignore-scripts --no-audit "$PWD"/release/*.tgz @playwright/test@1.60.0
-          cd "$consumer"
-          node smoke.mjs
+      - name: Verify archive hashes, then install outside the checkout
+        run: node scripts/install-check.mjs

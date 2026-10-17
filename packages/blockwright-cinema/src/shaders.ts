@@ -26,15 +26,20 @@ export interface SeedShaderPackOptions {
 /**
  * Puts an Iris shader pack into a client's instance dir before it launches: the pack unpacked (so its sources
  * can be patched), its settings written, and Iris told to use it. The client needs Iris among its mods, and
- * must be launched into the dir as it is (`reuseInstanceDir`; a `seedInstance` does that). Needs `unzip` on
- * PATH. Answers the pack's name. A patch whose `find` is gone throws: the pack changed under it.
+ * must be launched into the dir as it is (`reuseInstanceDir`; a `seedInstance` does that). Uses Windows'
+ * built-in tar.exe, or `unzip` on Linux PATH. Answers the pack's name. A missing patch target throws.
  */
 export function seedShaderPack(instanceDir: string, options: SeedShaderPackOptions): string {
   if (!existsSync(options.zip)) throw new Error(`shader pack not found at ${options.zip}`);
   const name = options.name ?? path.basename(options.zip).replace(/\.zip$/i, "");
   const pack = path.join(instanceDir, "shaderpacks", name);
   mkdirSync(pack, { recursive: true });
-  execFileSync("unzip", ["-oq", options.zip, "-d", pack]);
+  if (process.platform === "win32") {
+    const tar = path.join(process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows", "System32", "tar.exe");
+    execFileSync(tar, ["-xf", path.resolve(options.zip), "-C", pack], { windowsHide: true });
+  } else {
+    execFileSync("unzip", ["-oq", options.zip, "-d", pack]);
+  }
   for (const patch of options.patches ?? []) {
     const file = path.join(pack, patch.file);
     const source = readFileSync(file, "utf8");

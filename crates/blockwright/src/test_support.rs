@@ -19,7 +19,7 @@ impl TempDir {
             std::process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        let _ = fs::remove_dir_all(&path);
+        let _ = crate::platform::fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         Self { path }
     }
@@ -40,6 +40,6 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+        let _ = crate::platform::fs::remove_dir_all(&self.path);
     }
 }

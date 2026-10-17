@@ -6,6 +6,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOOLS } from "@izakyl/blockwright-mcp";
 import type { BlockwrightSession } from "@izakyl/blockwright-mcp";
+import type { TestInfo } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+
+/** Keep qualification evidence on disk even with the console-only reporter. */
+export async function attachJsonArtifact(testInfo: TestInfo, name: string, value: unknown): Promise<void> {
+  const file = testInfo.outputPath(name);
+  writeFileSync(file, JSON.stringify(value, null, 2));
+  await testInfo.attach(name, { path: file, contentType: "application/json" });
+}
 
 /** The live directory: specs launch with it as the driver's cwd, so instances live under live/.blockwright. */
 export const LIVE_DIR = path.dirname(fileURLToPath(import.meta.url));

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -338,8 +338,8 @@ test("recording: the audio span that matches the video, by the game's clock, is 
     assert.equal(result.audio?.offsetSeconds, 0.2);
     assert.equal(result.audio?.sampleRate, 48_000);
     const probe = execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "csv=p=0", result.path], { encoding: "utf8" });
-    assert.deepEqual(probe.trim().split("\n").sort(), ["aac,audio", "h264,video"]);
-    const leftovers = execFileSync("ls", ["-A", dir], { encoding: "utf8" }).trim().split("\n");
+    assert.deepEqual(probe.trim().split(/\r?\n/).sort(), ["aac,audio", "h264,video"]);
+    const leftovers = readdirSync(dir).sort();
     assert.deepEqual(leftovers, ["clip.mp4"], "the intermediate video and wav are removed");
   } finally {
     rmSync(dir, { recursive: true, force: true });

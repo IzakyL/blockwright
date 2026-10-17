@@ -11,11 +11,15 @@
     "test:live": "playwright test --config live/blockwright.config.ts",
     "typecheck:live": "tsc -b && tsc -p live/tsconfig.json --noEmit",
     "build:release": "node scripts/build-release.mjs",
-    "test:java": "./coverage-report/gradlew -p coverage-report test && ./neoforge-agent/gradlew -p neoforge-agent check",
+    "test:java": "node scripts/test-java.mjs",
     "release:check": "npm test && npm run typecheck:live && cargo test --locked && npm run build:release && npm run test:release && npm run pack:check",
     "pack:check": "node scripts/pack-check.mjs",
     "version:release": "node scripts/version-release.mjs",
-    "test:release": "node --test scripts/release.test.mjs"
+    "test:release": "node --test scripts/release.test.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "build:agents": "node scripts/build-agents.mjs",
+    "build:dev": "node scripts/build-release.mjs --development",
+    "test:install": "node scripts/install-check.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

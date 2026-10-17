@@ -135,6 +135,7 @@ dependencies = [
  "glob",
  "libc",
  "reflink-copy",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -147,6 +148,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "walkdir",
+ "windows-sys",
  "zip",
 ]
 
@@ -1003,6 +1005,18 @@ dependencies = [
  "libc",
  "rustix",
  "windows",
+]
+
+[[package]]
+name = "regex"
+version = "1.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a0e75113e14dc5acb068cd0786884f214f1312650a3d36d269f5c4f3cdee8a2"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]

@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findInstance, listInstances, registryDir } from "./registry.js";
+import { findInstance, instanceAlive, listInstances, registryDir } from "./registry.js";
 import type { InstanceRecord } from "./registry.js";
 
 function root(): string {
@@ -28,6 +28,11 @@ function seed(dir: string, ...records: InstanceRecord[]): void {
   }
 }
 
+test("instanceAlive recognizes this process on every platform and rejects unsafe PID values", () => {
+  assert.equal(instanceAlive(process.pid), true);
+  for (const pid of [0, -1, NaN, Infinity, 1.5, 4_294_000_000]) assert.equal(instanceAlive(pid), false);
+});
+
 test("an absent registry reads as no instances rather than throwing", () => {
   assert.deepEqual(listInstances(root()), []);
 });
@@ -36,6 +41,13 @@ test("a record whose process is gone is not listed", () => {
   const dir = root();
   seed(dir, record({ instanceId: "alive" }), record({ instanceId: "dead", pid: 4_294_000_000 }));
   assert.deepEqual(listInstances(dir).map((r) => r.instanceId), ["alive"]);
+});
+
+test("foreign-platform records are retained because their PID cannot be inspected locally", () => {
+  const dir = root();
+  const foreign = process.platform === "win32" ? "linux-x64" : "win32-x64";
+  seed(dir, record({ instanceId: "foreign", pid: 4_294_000_000, platform: foreign, processIdentity: "foreign:creation" }));
+  assert.equal(listInstances(dir)[0]?.processIdentity, "foreign:creation");
 });
 
 test("findInstance takes the only instance when nothing is named", () => {

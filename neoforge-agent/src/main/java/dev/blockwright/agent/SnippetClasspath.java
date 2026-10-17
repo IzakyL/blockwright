@@ -129,57 +129,77 @@ final class SnippetClasspath {
     }
 
     static String normalize(String raw) {
+        return normalize(raw, File.separatorChar == '\\');
+    }
+
+    static String normalize(String raw, boolean windows) {
         if (raw == null || raw.isBlank()) {
             return null;
         }
         String value = raw.trim();
-        int hash = value.indexOf('#');
-        if (hash >= 0) {
-            value = value.substring(0, hash);
-        }
-        int bang = value.indexOf("!/");
-        if (bang >= 0) {
-            value = value.substring(0, bang);
-        }
+        boolean wrapped = false;
+        boolean union = false;
         boolean stripped = true;
         while (stripped) {
             stripped = false;
-            for (String scheme : List.of("union:", "jar:", "jij:", "file:")) {
+            for (String scheme : List.of("union:", "jar:", "jij:")) {
                 if (value.startsWith(scheme)) {
+                    wrapped = true;
+                    union |= scheme.equals("union:");
                     value = value.substring(scheme.length());
                     stripped = true;
                 }
             }
         }
-        while (value.startsWith("//")) {
-            value = value.substring(1);
+        if (wrapped) {
+            int bang = value.indexOf("!/");
+            if (bang >= 0) {
+                value = value.substring(0, bang);
+            }
         }
-        value = percentDecode(value);
+        if (union) {
+            int hash = value.lastIndexOf('#');
+            if (hash >= 0 && value.substring(hash + 1).matches("[0-9]+")) {
+                value = value.substring(0, hash);
+            }
+        }
+        try {
+            if (value.startsWith("file:")) {
+                // URI parses drive letters, escaped '#'/'+' and UNC authorities without
+                // treating separators or encoded characters as wrapper delimiters.
+                URI uri = URI.create(value.replace(" ", "%20"));
+                String authority = uri.getAuthority();
+                value = uri.isOpaque() ? uri.getSchemeSpecificPart() : uri.getPath();
+                if (value == null) {
+                    return null;
+                }
+                if (authority != null && !authority.isEmpty() && !authority.equalsIgnoreCase("localhost")) {
+                    value = "//" + authority + value;
+                }
+            } else if (wrapped) {
+                value = percentDecode(value);
+            } else if (value.matches("^[A-Za-z][A-Za-z0-9+.-]*:.*") && !value.matches("^[A-Za-z]:[\\\\/].*")) {
+                return null;
+            }
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+        if (windows) {
+            if (value.matches("^/[A-Za-z]:/.*")) {
+                value = value.substring(1);
+            }
+            value = value.replace('/', '\\');
+        }
         if (value.endsWith("/") && value.length() > 1) {
+            value = value.substring(0, value.length() - 1);
+        }
+        if (windows && value.endsWith("\\") && value.length() > 1 && !value.matches("^[A-Za-z]:\\\\$")) {
             value = value.substring(0, value.length() - 1);
         }
         return value.isEmpty() ? null : value;
     }
 
     static String percentDecode(String value) {
-        if (value.indexOf('%') < 0) {
-            return value;
-        }
-        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream(value.length());
-        for (int index = 0; index < value.length(); index++) {
-            char ch = value.charAt(index);
-            if (ch == '%' && index + 2 < value.length()) {
-                int high = Character.digit(value.charAt(index + 1), 16);
-                int low = Character.digit(value.charAt(index + 2), 16);
-                if (high >= 0 && low >= 0) {
-                    bytes.write((high << 4) + low);
-                    index += 2;
-                    continue;
-                }
-            }
-            byte[] encoded = String.valueOf(ch).getBytes(StandardCharsets.UTF_8);
-            bytes.write(encoded, 0, encoded.length);
-        }
-        return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
+        return java.net.URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8);
     }
 }

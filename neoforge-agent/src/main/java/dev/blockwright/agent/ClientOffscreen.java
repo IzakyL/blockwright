@@ -4,6 +4,8 @@ import java.util.Objects;
 
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.opengl.GL;
+import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.JNI;
 import org.lwjgl.system.Library;
 import org.lwjgl.system.MemoryStack;
@@ -44,6 +46,7 @@ public final class ClientOffscreen {
 
     private static Egl egl;
     private static Chosen chosen;
+    private static long hiddenWindow;
 
     private ClientOffscreen() {
     }
@@ -56,18 +59,52 @@ public final class ClientOffscreen {
     }
 
     /**
-     * Every client blockwright launches is offscreen, picture and sound: no window, no sound device. A client
-     * that has the agent without blockwright launching it keeps its window and its sound.
+     * Managed clients use an offscreen display and loopback sound. Windows keeps a hidden native
+     * window for its WGL context; Linux uses EGL without a native window. This predicate describes
+     * management, not the graphics backend, so input, audio and capture work on both platforms.
      */
     public static boolean enabled() {
         return AgentTrace.isEnabled();
     }
 
-    public static void applyInitHints() {
-        GLFW.glfwInitHint(GLFW.GLFW_PLATFORM, GLFW.GLFW_PLATFORM_NULL);
+    public static boolean usesEgl() {
+        return enabled() && !windows();
     }
 
-    public static void makeContextCurrent() {
+    public static boolean usesHiddenWindow() {
+        return enabled() && windows();
+    }
+
+    private static boolean windows() {
+        return System.getProperty("os.name", "").startsWith("Windows");
+    }
+
+    public static void applyInitHints() {
+        if (windows()) {
+            validateWindowsDevice(deviceProperty());
+            GLFW.glfwInitHint(GLFW.GLFW_PLATFORM, GLFW.GLFW_PLATFORM_WIN32);
+        } else {
+            GLFW.glfwInitHint(GLFW.GLFW_PLATFORM, GLFW.GLFW_PLATFORM_NULL);
+        }
+    }
+
+    /** Applied after Minecraft resets GLFW hints and before NeoForge creates the native window. */
+    public static void applyWindowHints() {
+        if (!usesHiddenWindow()) {
+            return;
+        }
+        GLFW.glfwWindowHint(GLFW.GLFW_VISIBLE, GLFW.GLFW_FALSE);
+        GLFW.glfwWindowHint(GLFW.GLFW_FOCUSED, GLFW.GLFW_FALSE);
+        GLFW.glfwWindowHint(GLFW.GLFW_FOCUS_ON_SHOW, GLFW.GLFW_FALSE);
+        GLFW.glfwWindowHint(GLFW.GLFW_CLIENT_API, GLFW.GLFW_OPENGL_API);
+        GLFW.glfwWindowHint(GLFW.GLFW_CONTEXT_CREATION_API, GLFW.GLFW_NATIVE_CONTEXT_API);
+    }
+
+    public static void makeContextCurrent(long window) {
+        if (windows()) {
+            makeHiddenContextCurrent(window);
+            return;
+        }
         if (chosen != null) {
             return;
         }
@@ -82,6 +119,8 @@ public final class ClientOffscreen {
             "client.offscreen.context",
             AgentTrace.configuredRole("client"),
             Json.of(
+                "backend", "egl",
+                "platform", "linux",
                 "device", Objects.toString(chosen.renderer, ""),
                 "vendor", Objects.toString(chosen.vendor, ""),
                 "gl", Objects.toString(chosen.version, ""),
@@ -98,12 +137,73 @@ public final class ClientOffscreen {
         }
     }
 
+    static void validateWindowsDevice(String device) {
+        if (!device.equals("auto") && !device.equals("gpu")) {
+            throw new IllegalStateException(
+                "Windows [client.display] supports device=auto or gpu using the system-selected GPU; "
+                    + "device=" + device + " is not supported");
+        }
+    }
+
+    private static void makeHiddenContextCurrent(long window) {
+        validateWindowsDevice(deviceProperty());
+        if (window == 0L) {
+            throw new IllegalStateException("Windows offscreen display has no native GLFW window");
+        }
+        if (GLFW.glfwGetWindowAttrib(window, GLFW.GLFW_VISIBLE) != GLFW.GLFW_FALSE) {
+            throw new IllegalStateException(
+                "Windows offscreen display must be created hidden; disable the NeoForge early window");
+        }
+        GLFW.glfwMakeContextCurrent(window);
+        if (hiddenWindow == window) {
+            return;
+        }
+        if (!GL.createCapabilities().OpenGL32) {
+            throw new IllegalStateException("Windows offscreen display requires an OpenGL 3.2 core GPU context");
+        }
+        String renderer = GL11.glGetString(GL_RENDERER);
+        if (renderer != null && Egl.isSoftware(renderer)) {
+            throw new IllegalStateException(
+                "Windows offscreen display requires a GPU driver; software renderer " + renderer + " is not supported");
+        }
+        hiddenWindow = window;
+        AgentTrace.emit(
+            "client.offscreen.context",
+            AgentTrace.configuredRole("client"),
+            Json.of(
+                "backend", "wgl",
+                "platform", "win32",
+                "device", Objects.toString(renderer, ""),
+                "vendor", Objects.toString(GL11.glGetString(GL11.GL_VENDOR), ""),
+                "gl", Objects.toString(GL11.glGetString(GL_VERSION), ""),
+                "index", -1,
+                "requested", deviceProperty(),
+                "software", false,
+                "degraded", false));
+    }
+
+    /** Called on the render thread immediately before Minecraft destroys its native window. */
+    public static void releaseWindowContext(long window) {
+        if (usesHiddenWindow() && hiddenWindow == window) {
+            release();
+        }
+    }
+
     /**
      * Unbinds and destroys the offscreen context before the process ends. Must run on the thread it
      * is current on: exiting with it live lets the NVIDIA EGL library tear it down from its exit
      * handlers, which can crash the JVM on its way out.
      */
     static void release() {
+        if (windows()) {
+            if (hiddenWindow != 0L) {
+                GLFW.glfwMakeContextCurrent(0L);
+                GL.setCapabilities(null);
+                hiddenWindow = 0L;
+            }
+            // Minecraft's Window.close owns destruction of the native WGL context and window.
+            return;
+        }
         if (chosen == null) {
             return;
         }
@@ -112,6 +212,10 @@ public final class ClientOffscreen {
     }
 
     public static void deliverWindowFocus(long window) {
+        if (windows()) {
+            // Gameplay focus is supplied by WindowMixin; never show or focus the native window.
+            return;
+        }
         if (GLFW.glfwGetWindowAttrib(window, GLFW.GLFW_FOCUSED) != GLFW.GLFW_TRUE) {
             return;
         }

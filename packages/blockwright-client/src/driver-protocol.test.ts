@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,8 +8,8 @@ import { BlockwrightDriver, BlockwrightRequestTimeoutError, BlockwrightRpcError 
 
 function mockDriver(): { path: string; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), "blockwright-driver-protocol-test-"));
-  const path = join(dir, "mock-driver.js");
-  writeFileSync(path, `#!/usr/bin/env node
+  const path = join(dir, "mock-driver.mjs");
+  writeFileSync(path, `
 import { createInterface } from "node:readline";
 const rl = createInterface({ input: process.stdin });
 const send = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n");
@@ -43,7 +43,6 @@ rl.on("line", (line) => {
   }
 });
 `);
-  chmodSync(path, 0o755);
   return { path, dir };
 }
 
@@ -52,12 +51,15 @@ async function withDriver(
   body: (driver: BlockwrightDriver) => Promise<void>,
 ): Promise<void> {
   const mock = mockDriver();
-  const driver = new BlockwrightDriver({ driverPath: mock.path, requestTimeoutMs: options.requestTimeoutMs });
+  const driver = new BlockwrightDriver({ driverPath: process.execPath, driverArgs: [mock.path], requestTimeoutMs: options.requestTimeoutMs });
   try {
     await body(driver);
   } finally {
-    driver.close();
-    rmSync(mock.dir, { recursive: true, force: true });
+    try {
+      await driver.closeAsync();
+    } finally {
+      rmSync(mock.dir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -89,6 +91,8 @@ test("after a request outlives its budget every later request fails fast naming 
 
 test("requests are sent one at a time and each budget starts when it is sent", { timeout: 20_000 }, async () => {
   await withDriver({ requestTimeoutMs: 300 }, async (driver) => {
+    // Exclude executable startup from this check of queued request budgets.
+    await driver.ping({ timeoutMs: 10_000 });
     const [first, second] = await Promise.all([
       driver.request<{ delayMs: number }>("ping", { delayMs: 200 }),
       driver.request<{ delayMs: number }>("ping", { delayMs: 200 }),

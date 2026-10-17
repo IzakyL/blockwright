@@ -1,0 +1,20 @@
+// Explicit desktop-GPU test opt-in; production builds do not depend on this probe or its jars.
+gradle.projectsEvaluated {
+    allprojects {
+        def junitRepository = repositories.mavenCentral()
+        repositories.exclusiveContent {
+            forRepositories junitRepository
+            filter {
+                includeGroupByRegex 'org\\.junit.*'
+                includeGroup 'org.opentest4j'
+                includeGroup 'org.apiguardian'
+            }
+        }
+        tasks.withType(Test).configureEach {
+            systemProperty 'blockwright.test.windowsDisplay', 'true'
+            classpath += files(fileTree(new File(rootDir, '../scripts/probes/windows-display/build/libraries')) {
+                include '*.jar'
+            })
+        }
+    }
+}

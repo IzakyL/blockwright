@@ -1,8 +1,14 @@
 # Contributing
 
-Use Linux x64 and the environment described in [docs/environment.md](docs/environment.md).
+Released builds use Linux x64 and the environment described in [docs/environment.md](docs/environment.md).
 The repository pins Rust in `rust-toolchain.toml`, Node in `.nvmrc`, npm in
 `package.json`, and Gradle in both projects' checked-in wrappers. Use a Java 21 JDK.
+
+Windows 11 x64 is a development candidate. Use the same pinned tools plus MSVC
+build tools, a logged-in GPU desktop and FFmpeg for client qualification. Read the
+[Windows candidate requirements](docs/environment.md#windows-development-candidate)
+for device modes, JDK 21 path encoding and separate Windows/WSL stores. Passing a
+hosted Windows build does not qualify real client rendering.
 
 ```sh
 npm ci
@@ -12,14 +18,18 @@ cargo test --locked
 npm run test:java
 ```
 
-`npm ci` does not compile native components. To build the bundled driver and JARs:
+`npm ci` does not compile native components. For a current-platform development
+bundle with the driver and JARs:
 
 ```sh
-npm run build:release
-npm run pack:check
+npm run build:native
+npm run build:agents
+npm run build:dev
 ```
 
-`pack:check` installs all six archives in a temporary directory outside the
+Publishing requires both native target artifacts; follow
+[docs/releasing.md](docs/releasing.md) to assemble the complete release before
+running `pack:check`. It installs all six archives in a temporary directory outside the
 workspace, checks imports and declarations, reads packaged Java sources, runs a
 driver ping and verifies MCP CLI execution and a protocol handshake. Verified
 archives are copied into ignored `release/`. It needs registry access for external

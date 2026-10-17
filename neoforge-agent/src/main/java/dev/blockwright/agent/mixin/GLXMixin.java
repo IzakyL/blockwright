@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(GLX.class)
 public class GLXMixin {
     @Inject(method = "_initGlfw", at = @At("HEAD"))
-    private static void blockwright$selectNullPlatform(CallbackInfoReturnable<String> info) {
+    private static void blockwright$selectDisplayPlatform(CallbackInfoReturnable<String> info) {
         if (ClientOffscreen.enabled()) {
             ClientOffscreen.applyInitHints();
         }

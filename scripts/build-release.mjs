@@ -1,17 +1,35 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
-import { root, order, packageDir, run, checkVersions, nativeSourceHash, sha256, walk } from './release-lib.mjs';
+import { rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { assembleBundle, validateArtifact } from './artifact-lib.mjs';
+import { root, order, packageDir, run, checkVersions, currentTarget, nativeSourceHash, targets } from './release-lib.mjs';
 
-if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('Release builds require Linux x64');
+const args = process.argv.slice(2);
+const development = args.includes('--development');
+const value = (name, fallback) => {
+  const index = args.indexOf(name);
+  if (index < 0) return fallback;
+  if (!args[index + 1] || args[index + 1].startsWith('--')) throw new Error(`${name} requires a path`);
+  return resolve(args[index + 1]);
+};
+const known = new Set(['--development', '--native-dir', '--agents-dir']);
+for (let index = 0; index < args.length; index++) {
+  if (!known.has(args[index])) throw new Error(`Unknown release option: ${args[index]}`);
+  if (args[index] !== '--development') index++;
+}
+const nativeDirectory = value('--native-dir', join(root, 'release/native'));
+const agentsDirectory = value('--agents-dir', join(root, 'release/agents'));
+const targetNames = development ? [currentTarget()] : Object.keys(targets);
 const version = checkVersions();
 const sourceHash = nativeSourceHash();
-for (const name of order) rmSync(join(packageDir(name), 'dist'), { recursive: true, force: true });
-run('npm', ['run', 'build']);
-run('sh', ['packages/blockwright-client/scripts/build-bundle.sh']);
-run('node', ['scripts/third-party.mjs']);
-if (nativeSourceHash() !== sourceHash) throw new Error('Source changed during native build; run again from a stable checkout');
 const dist = join(packageDir('client'), 'dist');
-const files = Object.fromEntries(['blockwright', ...walk(join(dist, 'agents')).map(f => relative(dist, f)), ...walk(join(dist, 'third-party')).map(f => relative(dist, f))].map(file => [file, sha256(join(dist, file))]));
-writeFileSync(join(dist, 'bundle-manifest.json'), JSON.stringify({ version, sourceHash, files }, null, 2) + '\n');
-for (const name of order) run('node', ['scripts/check-package.mjs', packageDir(name)]);
-console.log('Release build complete. Run npm run pack:check to verify the installable archives.');
+// A failed rebuild cannot leave a valid-looking manifest from a previous build.
+rmSync(join(dist, 'bundle-manifest.json'), { force: true });
+for (const target of targetNames) validateArtifact(join(nativeDirectory, target), { kind: 'blockwright-native', target, version, sourceHash });
+validateArtifact(agentsDirectory, { kind: 'blockwright-agents', version, sourceHash });
+for (const name of order) rmSync(join(packageDir(name), 'dist'), { recursive: true, force: true });
+run('npm', ['run', 'build', '--', '--force']);
+if (nativeSourceHash() !== sourceHash) throw new Error('Source changed during bundle assembly');
+assembleBundle({ nativeDirectory, agentsDirectory, dist, version, sourceHash, targetNames, complete: !development });
+if (!development) for (const name of order) run('node', ['scripts/check-package.mjs', packageDir(name)]);
+console.log(development ? 'Development bundle complete for the current platform; prepack will reject this incomplete bundle.'
+  : 'Both native targets and canonical JARs assembled. Run npm run pack:check to verify the archives.');

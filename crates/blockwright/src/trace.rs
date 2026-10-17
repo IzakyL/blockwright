@@ -169,7 +169,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_lagged_subscription_still_sees_the_latest_event_of_each_name() {
-        let sink = TraceSink::create("/dev/null", "lagging").unwrap();
+        let sink =
+            TraceSink::create(if cfg!(windows) { "NUL" } else { "/dev/null" }, "lagging").unwrap();
         let mut events = sink.subscribe();
         sink.write("agent", "blockwright.lifecycle.ready", json!({}))
             .unwrap();

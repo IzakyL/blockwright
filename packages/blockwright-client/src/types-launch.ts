@@ -25,7 +25,7 @@ export interface InstanceLaunchResult {
 export interface InstanceCloseOptions {
   /** Leave the instance dir in place instead of deleting it (`blockwright gc` may still reclaim it later). */
   keepInstanceDir?: boolean;
-  /** How long the game gets after SIGTERM (shutdown hooks run) before the driver SIGKILLs it; default 10000. */
+  /** How long cooperative shutdown gets to save and exit before forced process-tree termination; default 30000. */
   graceMs?: number;
 }
 
@@ -37,16 +37,16 @@ export interface InstanceCloseOptions {
 export interface InstanceCloseResult {
   /** The exit code; null when a signal ended the process or there was none. */
   code: number | null;
-  /** The signal that ended the process, when one did (e.g. 15 SIGTERM, 9 SIGKILL). */
+  /** The POSIX signal that ended the process, when one did; null on Windows. */
   signal?: number | null;
   /**
-   * The process exited on its own: its exit status succeeded. The driver stopped it: it went on SIGTERM
-   * (exit 0 or 143, or the signal) without leaving crash evidence.
+   * The process exited successfully, or accepted a normal shutdown without leaving crash evidence.
+   * Forced termination is always unsuccessful.
    */
   success: boolean;
-  /** The driver stopped the process (SIGTERM, then SIGKILL after the grace period); false when it had already exited on its own. */
+  /** The driver requested shutdown; false when the process had already exited on its own. */
   terminated?: boolean;
-  /** It outlived SIGTERM's grace period and was SIGKILLed. */
+  /** It outlived the shutdown grace period and its process tree was forcibly terminated. */
   killed?: boolean;
   crashReport?: string;
   /** `Description:` and the exception with its first frames. */

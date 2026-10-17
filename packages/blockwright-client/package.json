@@ -4,7 +4,8 @@
   "license": "MIT",
   "type": "module",
   "os": [
-    "linux"
+    "linux",
+    "win32"
   ],
   "cpu": [
     "x64"
@@ -24,7 +25,7 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "npm run build && node --test 'dist/*.test.js'",
+    "test": "npm run build && node ../../scripts/test-package.mjs",
     "prepack": "npm run build && node ../../scripts/check-package.mjs"
   },
   "description": "Blockwright native driver and TypeScript SDK for Minecraft automation",

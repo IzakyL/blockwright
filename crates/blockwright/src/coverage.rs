@@ -688,11 +688,11 @@ mod tests {
             "--sources",
             &sources.display().to_string(),
             "--html",
-            "/out/html",
+            &Path::new("/out").join("html").display().to_string(),
             "--xml",
-            "/out/jacoco.xml",
+            &Path::new("/out").join("jacoco.xml").display().to_string(),
             "--lcov",
-            "/out/lcov.info",
+            &Path::new("/out").join("lcov.info").display().to_string(),
             "--name",
             "blockwright",
         ];
@@ -724,6 +724,8 @@ mod tests {
                 trace_path: None,
                 config: None,
                 started_at: String::new(),
+                process_identity: None,
+                platform: None,
             },
         )
         .unwrap();

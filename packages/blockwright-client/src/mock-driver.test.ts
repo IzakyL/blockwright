@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlockwrightDriver } from "./index.js";
@@ -22,6 +22,7 @@ export interface MockDriver {
   requests(): Array<{ method: string; params: Record<string, any> }>;
   /** A driver backed by the same mock script, for tests that start their own. */
   driverPath: string;
+  driverArgs: string[];
 }
 
 /** Runs `body` against a driver backed by test-support's serveMockDriver and a fake agent, and cleans all up after. */
@@ -29,12 +30,12 @@ export async function withMockDriver(options: MockDriverOptions, body: (mock: Mo
   const dir = mkdtempSync(join(tmpdir(), "blockwright-mock-driver-"));
   const agent = await startFakeAgent(options.agent);
   const path = join(dir, "mock-driver.mjs");
-  writeFileSync(path, `#!/usr/bin/env node
+  writeFileSync(path, `
 import { serveMockDriver } from ${JSON.stringify(new URL("../test-support/runtime.mjs", import.meta.url).href)};
 await serveMockDriver({ dir: ${JSON.stringify(dir)}, traceLines: ${JSON.stringify(options.traceLines ?? [READY])}, game: ${JSON.stringify(agent.descriptor)}, handle: ${options.handle ?? "undefined"} });
 `);
-  chmodSync(path, 0o755);
-  const driver = new BlockwrightDriver({ driverPath: path, cwd: dir });
+  const driverArgs = [path];
+  const driver = new BlockwrightDriver({ driverPath: process.execPath, driverArgs, cwd: dir });
   const requests = () => {
     const log = join(dir, "requests.jsonl");
     if (!existsSync(log)) return [];
@@ -44,10 +45,13 @@ await serveMockDriver({ dir: ${JSON.stringify(dir)}, traceLines: ${JSON.stringif
       .map((line) => JSON.parse(line));
   };
   try {
-    await body({ driver, dir, agent, requests, driverPath: path });
+    await body({ driver, dir, agent, requests, driverPath: process.execPath, driverArgs });
   } finally {
-    driver.close();
-    await agent.close();
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      await driver.closeAsync();
+    } finally {
+      await agent.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 }
