@@ -6,6 +6,22 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+/// Retries `attempt` for up to two seconds until it gives `Some`.
+///
+/// For a test that expects to take a lock nobody holds: a process another test spawns at
+/// that moment inherits every open lock until it execs, so a lock just dropped can still
+/// look held for an instant.
+pub(crate) fn eventually<T>(mut attempt: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let result = attempt();
+        if result.is_some() || std::time::Instant::now() >= deadline {
+            return result;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// A fresh directory under the system temp dir, removed when dropped.
 pub(crate) struct TempDir {
     path: PathBuf,

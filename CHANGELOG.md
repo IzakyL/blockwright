@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Windows candidate
+## 0.1.0-alpha.2 — 2026-10-22
 
 - Add Windows x64 native process ownership, independent instance files, platform
   runtime caches and a hidden GLFW/WGL GPU client backend. Windows remains a

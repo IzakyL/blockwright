@@ -1,6 +1,6 @@
 {
   "name": "@izakyl/blockwright-cinema",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
@@ -23,8 +23,8 @@
     "prepack": "npm run build && node ../../scripts/check-package.mjs"
   },
   "dependencies": {
-    "@izakyl/blockwright-client": "0.1.0-alpha.1",
-    "@izakyl/blockwright-minecraft": "0.1.0-alpha.1"
+    "@izakyl/blockwright-client": "0.1.0-alpha.2",
+    "@izakyl/blockwright-minecraft": "0.1.0-alpha.2"
   },
   "description": "Camera paths, time curves and frame-stepped timelapse capture for Blockwright",
   "engines": {

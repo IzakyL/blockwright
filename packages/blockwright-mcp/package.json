@@ -1,6 +1,6 @@
 {
   "name": "@izakyl/blockwright-mcp",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "license": "MIT",
   "type": "module",
   "os": [
@@ -32,14 +32,14 @@
     "prepack": "npm run build && node ../../scripts/check-package.mjs"
   },
   "dependencies": {
-    "@izakyl/blockwright-client": "0.1.0-alpha.1",
-    "@izakyl/blockwright-minecraft": "0.1.0-alpha.1",
-    "@izakyl/blockwright-ui": "0.1.0-alpha.1",
+    "@izakyl/blockwright-client": "0.1.0-alpha.2",
+    "@izakyl/blockwright-minecraft": "0.1.0-alpha.2",
+    "@izakyl/blockwright-ui": "0.1.0-alpha.2",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@izakyl/blockwright-test": "0.1.0-alpha.1"
+    "@izakyl/blockwright-test": "0.1.0-alpha.2"
   },
   "description": "Model Context Protocol server for Blockwright Minecraft automation",
   "engines": {

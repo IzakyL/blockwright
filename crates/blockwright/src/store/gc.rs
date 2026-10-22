@@ -128,7 +128,7 @@ mod tests {
     use crate::config::InstanceRole;
     use crate::registry::InstanceRecord;
     use crate::store::{cache::Cache, record_refs};
-    use crate::test_support::TempDir;
+    use crate::test_support::{eventually, TempDir};
 
     struct Layout {
         tmp: TempDir,
@@ -148,7 +148,12 @@ mod tests {
         }
     }
 
+    /// One gc over `layout`, retried while the store only looks held (see `eventually`).
     fn run(layout: &Layout, dry_run: bool) -> Option<GcReport> {
+        eventually(|| try_run(layout, dry_run))
+    }
+
+    fn try_run(layout: &Layout, dry_run: bool) -> Option<GcReport> {
         let scope = GcScope {
             store_dir: &layout.store,
             instances_dir: &layout.instances,
@@ -274,7 +279,7 @@ mod tests {
     fn gc_stands_down_while_the_store_is_held() {
         let layout = layout("gc-locked");
         let held = StoreLock::shared(&layout.store).unwrap();
-        assert!(run(&layout, false).is_none());
+        assert!(try_run(&layout, false).is_none());
         drop(held);
         assert!(run(&layout, false).is_some());
     }

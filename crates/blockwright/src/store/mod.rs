@@ -142,7 +142,7 @@ pub fn record_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::TempDir;
+    use crate::test_support::{eventually, TempDir};
 
     #[test]
     fn shared_locks_coexist_and_exclude_an_exclusive_lock() {
@@ -151,10 +151,10 @@ mod tests {
         let second = StoreLock::shared(tmp.path()).unwrap();
         assert!(StoreLock::try_exclusive(tmp.path()).unwrap().is_none());
         drop((first, second));
-        let exclusive = StoreLock::try_exclusive(tmp.path()).unwrap().unwrap();
+        let exclusive = eventually(|| StoreLock::try_exclusive(tmp.path()).unwrap()).unwrap();
         assert!(StoreLock::try_exclusive(tmp.path()).unwrap().is_none());
         drop(exclusive);
-        assert!(StoreLock::try_exclusive(tmp.path()).unwrap().is_some());
+        assert!(eventually(|| StoreLock::try_exclusive(tmp.path()).unwrap()).is_some());
     }
 
     #[test]
@@ -188,12 +188,12 @@ mod tests {
             return;
         };
         let blocked = std::env::var("BLOCKWRIGHT_LOCK_PROBE_BLOCKED").unwrap() == "1";
-        assert_eq!(
-            StoreLock::try_exclusive(Path::new(&path))
-                .unwrap()
-                .is_none(),
-            blocked
-        );
+        let path = Path::new(&path);
+        if blocked {
+            assert!(StoreLock::try_exclusive(path).unwrap().is_none());
+        } else {
+            assert!(eventually(|| StoreLock::try_exclusive(path).unwrap()).is_some());
+        }
     }
 
     #[cfg(windows)]
