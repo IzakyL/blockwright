@@ -6,6 +6,9 @@
   fsync every region write. A forcibly killed server can lose more recent chunks;
   set `"sync-chunk-writes" = "true"` in `[neoforge.server.properties]` to restore
   vanilla behaviour.
+- Upgrade `@izakyl/blockwright-mcp` to `zod` 4 and refresh transitive dependencies to
+  clear `npm audit` findings. MCP tool schemas no longer declare
+  `additionalProperties: false`; unknown arguments are still stripped when parsed.
 
 ## 0.1.0-alpha.2 — 2026-10-22
 

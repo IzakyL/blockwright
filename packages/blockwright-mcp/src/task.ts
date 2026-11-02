@@ -22,7 +22,7 @@ export const taskShape = {
   file: z.string().optional().describe("a .java file holding a whole task, relative to the working directory"),
   role: roleArg,
   thread: z.enum(["server", "client", "worker"]).optional(),
-  args: z.record(z.unknown()).optional(),
+  args: z.record(z.string(), z.unknown()).optional(),
   modules: z.array(z.object({
     root: z.string().describe("the source root the package directories are under"),
     package: z.string(),

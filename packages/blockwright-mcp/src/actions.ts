@@ -50,7 +50,7 @@ const uiShape = {
   ref: z.string().optional().describe("[eN] ref from an observation or an action's ui diff; refs stay valid across reads"),
   adapter: z.string().optional().describe("with selector: the UI adapter it belongs to"),
   selector: z
-    .record(z.union([z.string(), z.number(), z.boolean(), z.array(z.number())]))
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.number())]))
     .optional()
     .describe("an adapter's own locator, e.g. minecraft { label } | { className, index? } | { slot }"),
   x: z.number().optional(),

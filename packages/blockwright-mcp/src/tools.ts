@@ -116,7 +116,7 @@ const batchShape = {
   steps: z
     .array(z.object({
       tool: z.enum(["command", "ui", "key", "tick", "look", "observe", "screenshot"]),
-      args: z.record(z.unknown()).optional(),
+      args: z.record(z.string(), z.unknown()).optional(),
     }))
     .min(1)
     .max(50),
