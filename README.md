@@ -103,9 +103,10 @@ the working directory. Test artifacts go to `test-results/`. These directories
 are local runtime data, not source or release files. Minecraft is downloaded at
 runtime and is not bundled in the npm packages.
 
-Test servers default to `online-mode=false` and `server-ip=127.0.0.1`. Use explicit
-`[neoforge.server.properties]` overrides if you need another bind address or
-online authentication. Game tasks and loaded mods execute code with your user
+Test servers default to `online-mode=false`, `server-ip=127.0.0.1` and
+`sync-chunk-writes=false`. Use explicit `[neoforge.server.properties]` overrides if
+you need another bind address, online authentication or synchronous chunk writes,
+for example to test how much world data survives a crash. Game tasks and loaded mods execute code with your user
 account's permissions; use trusted configurations and modules.
 
 ## Development and releases

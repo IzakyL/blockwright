@@ -298,6 +298,8 @@ fn prepare_server_files(
         let mut props = BTreeMap::new();
         props.insert("online-mode".to_string(), "false".to_string());
         props.insert("server-ip".to_string(), "127.0.0.1".to_string());
+        // Vanilla fsyncs every region write by default, which is costly for disposable test worlds.
+        props.insert("sync-chunk-writes".to_string(), "false".to_string());
         for (key, value) in &neoforge.server.properties {
             props.insert(key.clone(), value.clone());
         }
@@ -677,6 +679,24 @@ public static void main(String[] args) {
         let properties = fs::read_to_string(temp.path().join("server.properties")).unwrap();
         assert!(properties.contains("server-ip=192.0.2.1\n"));
         assert!(!properties.contains("server-ip=127.0.0.1"));
+    }
+
+    #[test]
+    fn test_server_disables_sync_chunk_writes_by_default_and_allows_override() {
+        let temp = TempDir::new("server_sync_chunk_writes");
+        let mut config = NeoForgeConfig::default();
+        config.server.eula = true;
+        prepare_server_files(&config, temp.path(), &temp.path().join("port")).unwrap();
+        let properties = fs::read_to_string(temp.path().join("server.properties")).unwrap();
+        assert!(properties.contains("sync-chunk-writes=false\n"));
+        config
+            .server
+            .properties
+            .insert("sync-chunk-writes".into(), "true".into());
+        prepare_server_files(&config, temp.path(), &temp.path().join("port")).unwrap();
+        let properties = fs::read_to_string(temp.path().join("server.properties")).unwrap();
+        assert!(properties.contains("sync-chunk-writes=true\n"));
+        assert!(!properties.contains("sync-chunk-writes=false"));
     }
 
     #[test]

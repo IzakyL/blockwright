@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.3 — 2026-11-02
+
+- Default test servers to `sync-chunk-writes=false`, so disposable worlds no longer
+  fsync every region write. A forcibly killed server can lose more recent chunks;
+  set `"sync-chunk-writes" = "true"` in `[neoforge.server.properties]` to restore
+  vanilla behaviour.
+
 ## 0.1.0-alpha.2 — 2026-10-22
 
 - Add Windows x64 native process ownership, independent instance files, platform
